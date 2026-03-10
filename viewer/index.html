@@ -1,0 +1,1327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Google Street View Freshness - US Coverage Analysis</title>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css" rel="stylesheet">
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: #0a0a0a;
+    color: #e5e5e5;
+    overflow: hidden;
+  }
+
+  #map { position: absolute; inset: 0; }
+
+  /* Loading overlay */
+  #loading-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(10, 10, 10, 0.95);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.6s ease, visibility 0.6s ease;
+  }
+  #loading-overlay.hidden {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+  .loading-spinner {
+    width: 48px;
+    height: 48px;
+    border: 3px solid rgba(255, 255, 255, 0.08);
+    border-top-color: #DAFF00;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text {
+    margin-top: 16px;
+    font-size: 13px;
+    color: #737373;
+    letter-spacing: 0.03em;
+  }
+
+  /* Info panel */
+  #panel {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    z-index: 10;
+    background: rgba(13, 13, 12, 0.92);
+    backdrop-filter: blur(24px) saturate(1.2);
+    -webkit-backdrop-filter: blur(24px) saturate(1.2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    padding: 24px;
+    width: 300px;
+    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+    transition: box-shadow 0.3s ease;
+  }
+  #panel h1 {
+    font-size: 16px;
+    font-weight: 700;
+    color: #f5f5f5;
+    letter-spacing: -0.025em;
+    line-height: 1.3;
+  }
+  #panel .subtitle {
+    font-size: 10px;
+    color: #525252;
+    margin-top: 3px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+  #panel .filter-subtitle {
+    font-size: 11px;
+    color: #DAFF00;
+    margin-top: 4px;
+    font-weight: 500;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    height: 0;
+    overflow: hidden;
+  }
+  #panel .filter-subtitle.visible {
+    opacity: 1;
+    height: auto;
+    margin-top: 6px;
+  }
+
+  /* Stats */
+  .stats {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .stat-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #f5f5f5;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+    transition: color 0.3s ease;
+  }
+  .stat-sub {
+    font-size: 11px;
+    color: #525252;
+    font-variant-numeric: tabular-nums;
+    margin-top: -1px;
+  }
+  .stat-value.danger { color: #f87171; }
+  .stat-value.warning { color: #fbbf24; }
+  .stat-value.accent { color: #DAFF00; }
+  .stat-label {
+    font-size: 11px;
+    color: #525252;
+    letter-spacing: 0.02em;
+    font-weight: 500;
+  }
+
+  /* Controls */
+  .controls {
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .control-group {
+    margin-bottom: 14px;
+  }
+  .control-group:last-child { margin-bottom: 0; }
+  .control-label {
+    font-size: 10px;
+    color: #525252;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .radio-group, .checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .radio-group { flex-direction: row; gap: 4px; flex-wrap: wrap; }
+  .radio-group label {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 7px 6px;
+    font-size: 10.5px;
+    font-weight: 500;
+    color: #737373;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .radio-group label:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #d4d4d4;
+  }
+  .radio-group input:checked + label {
+    background: rgba(218, 255, 0, 0.1);
+    border-color: rgba(218, 255, 0, 0.25);
+    color: #DAFF00;
+  }
+  .radio-group input { display: none; }
+
+  .checkbox-group label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #737373;
+    cursor: pointer;
+    transition: color 0.15s ease;
+    user-select: none;
+  }
+  .checkbox-group label:hover { color: #d4d4d4; }
+  .checkbox-group input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: #DAFF00;
+    cursor: pointer;
+  }
+
+  /* Legend */
+  #legend {
+    position: absolute;
+    bottom: 120px;
+    left: 16px;
+    z-index: 10;
+    background: rgba(13, 13, 12, 0.92);
+    backdrop-filter: blur(24px) saturate(1.2);
+    -webkit-backdrop-filter: blur(24px) saturate(1.2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    min-width: 180px;
+  }
+  .legend-title {
+    font-size: 10px;
+    color: #525252;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #737373;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  .legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .legend-label {
+    flex: 1;
+  }
+  .legend-count {
+    font-size: 11px;
+    color: #404040;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Popup styling */
+  .mapboxgl-popup-content {
+    background: rgba(13, 13, 12, 0.96) !important;
+    backdrop-filter: blur(24px) saturate(1.2);
+    -webkit-backdrop-filter: blur(24px) saturate(1.2);
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border-radius: 14px !important;
+    padding: 16px 18px !important;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7) !important;
+    color: #e5e5e5;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    min-width: 200px;
+  }
+  .mapboxgl-popup-tip {
+    border-top-color: rgba(13, 13, 12, 0.96) !important;
+  }
+  .mapboxgl-popup-close-button {
+    color: #525252 !important;
+    font-size: 18px !important;
+    padding: 4px 8px !important;
+    transition: color 0.15s ease !important;
+  }
+  .mapboxgl-popup-close-button:hover { color: #e5e5e5 !important; }
+  .popup-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #f5f5f5;
+    margin-bottom: 10px;
+    letter-spacing: -0.01em;
+  }
+  .popup-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 12px;
+    padding: 4px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+  .popup-row:last-child { border-bottom: none; }
+  .popup-row-label { color: #525252; font-weight: 500; }
+  .popup-row-value { color: #d4d4d4; font-weight: 500; }
+  .popup-row-value.no-coverage { color: #dc2626; font-weight: 600; }
+  .popup-row-value.bucket-0 { color: #00ff87; }
+  .popup-row-value.bucket-1 { color: #7dd3fc; }
+  .popup-row-value.bucket-2 { color: #fbbf24; }
+  .popup-row-value.bucket-3 { color: #f97316; }
+
+  /* =====================================================
+     DUAL-HANDLE DATE RANGE SLIDER
+     ===================================================== */
+  #date-slider-container {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 10;
+    background: linear-gradient(to top, rgba(10, 10, 10, 0.95) 0%, rgba(10, 10, 10, 0.85) 60%, transparent 100%);
+    padding: 12px 48px 20px 48px;
+    pointer-events: none;
+  }
+  #date-slider-inner {
+    pointer-events: auto;
+    max-width: 1200px;
+    margin: 0 auto;
+    position: relative;
+  }
+  .slider-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+  .slider-range-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #DAFF00;
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+  .slider-no-coverage-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #525252;
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.15s ease;
+  }
+  .slider-no-coverage-toggle:hover { color: #a3a3a3; }
+  .slider-no-coverage-toggle input {
+    accent-color: #DAFF00;
+    width: 13px;
+    height: 13px;
+    cursor: pointer;
+  }
+
+  .range-slider-wrap {
+    position: relative;
+    height: 36px;
+    display: flex;
+    align-items: center;
+  }
+
+  .range-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  .range-track-fill {
+    position: absolute;
+    height: 4px;
+    background: #DAFF00;
+    border-radius: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+  }
+
+  .range-slider-wrap input[type="range"] {
+    position: absolute;
+    width: 100%;
+    height: 36px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: none;
+    pointer-events: none;
+    z-index: 2;
+    margin: 0;
+    padding: 0;
+    top: 0;
+  }
+  .range-slider-wrap input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px;
+    background: transparent;
+  }
+  .range-slider-wrap input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #DAFF00;
+    border: 2px solid #0a0a0a;
+    box-shadow: 0 0 0 3px rgba(218, 255, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.5);
+    cursor: pointer;
+    pointer-events: auto;
+    margin-top: -7px;
+    transition: box-shadow 0.2s ease, transform 0.15s ease;
+  }
+  .range-slider-wrap input[type="range"]::-webkit-slider-thumb:hover {
+    box-shadow: 0 0 0 5px rgba(218, 255, 0, 0.25), 0 2px 12px rgba(0, 0, 0, 0.6);
+    transform: scale(1.1);
+  }
+  .range-slider-wrap input[type="range"]::-webkit-slider-thumb:active {
+    box-shadow: 0 0 0 6px rgba(218, 255, 0, 0.3), 0 2px 16px rgba(0, 0, 0, 0.7);
+    transform: scale(1.15);
+  }
+  /* Firefox */
+  .range-slider-wrap input[type="range"]::-moz-range-track {
+    height: 4px;
+    background: transparent;
+    border: none;
+  }
+  .range-slider-wrap input[type="range"]::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #DAFF00;
+    border: 2px solid #0a0a0a;
+    box-shadow: 0 0 0 3px rgba(218, 255, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.5);
+    cursor: pointer;
+    pointer-events: auto;
+  }
+
+  .slider-ticks {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0 0 0;
+  }
+  .slider-tick {
+    font-size: 10px;
+    color: #404040;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+  }
+
+  /* Responsive */
+  @media (max-width: 640px) {
+    #panel { width: calc(100% - 32px); }
+    #legend { right: 16px; }
+    #date-slider-container { padding: 12px 20px 16px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="loading-overlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">Loading coverage data...</div>
+</div>
+
+<div id="map"></div>
+
+<div id="panel">
+  <h1>Google Street View Freshness</h1>
+  <div class="subtitle">US Coverage Analysis</div>
+  <div class="filter-subtitle" id="filter-subtitle"></div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value accent" id="stat-total">--</div>
+      <div class="stat-label">Points sampled</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value danger" id="stat-no-coverage">--</div>
+      <div class="stat-sub" id="stat-no-coverage-pct"></div>
+      <div class="stat-label">No coverage</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" id="stat-median-age">--</div>
+      <div class="stat-sub" id="stat-avg-age"></div>
+      <div class="stat-label">Median / Avg age</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value warning" id="stat-over-3yr">--</div>
+      <div class="stat-sub" id="stat-over-3yr-pct"></div>
+      <div class="stat-label">Over 3 years old</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="control-group">
+      <div class="control-label">Layer</div>
+      <div class="radio-group">
+        <input type="radio" name="layer" id="layer-hex" value="hex" checked>
+        <label for="layer-hex">Hex Grid</label>
+        <input type="radio" name="layer" id="layer-points" value="points">
+        <label for="layer-points">Points</label>
+        <input type="radio" name="layer" id="layer-heatmap" value="heatmap">
+        <label for="layer-heatmap">Staleness</label>
+        <input type="radio" name="layer" id="layer-gaps" value="gaps">
+        <label for="layer-gaps">Gaps</label>
+      </div>
+    </div>
+    <div class="control-group">
+      <div class="control-label">Tier Filter</div>
+      <div class="checkbox-group">
+        <label><input type="checkbox" id="tier-1" checked> Cities 50K+</label>
+        <label><input type="checkbox" id="tier-2" checked> Cities 10K-50K</label>
+        <label><input type="checkbox" id="tier-3" checked> Rural grid</label>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="legend">
+  <div class="legend-title">Imagery Age</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#00ff87"></div><span class="legend-label">&lt;1 year</span><span class="legend-count" id="legend-count-0">--</span></div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#7dd3fc"></div><span class="legend-label">1-3 years</span><span class="legend-count" id="legend-count-1">--</span></div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#fbbf24"></div><span class="legend-label">3-5 years</span><span class="legend-count" id="legend-count-2">--</span></div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#f97316"></div><span class="legend-label">&gt;5 years</span><span class="legend-count" id="legend-count-3">--</span></div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#dc2626; opacity:0.6"></div><span class="legend-label">No coverage</span><span class="legend-count" id="legend-count-4">--</span></div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#6b7280"></div><span class="legend-label">Unknown date</span><span class="legend-count" id="legend-count-5">--</span></div>
+</div>
+
+<!-- Date Range Slider -->
+<div id="date-slider-container">
+  <div id="date-slider-inner">
+    <div class="slider-header">
+      <span class="slider-range-label" id="slider-range-label">Loading...</span>
+      <label class="slider-no-coverage-toggle">
+        <input type="checkbox" id="show-no-coverage" checked>
+        Show no-coverage points
+      </label>
+    </div>
+    <div class="range-slider-wrap">
+      <div class="range-track"></div>
+      <div class="range-track-fill" id="range-track-fill"></div>
+      <input type="range" id="range-min" min="0" max="100" value="0" step="0.1">
+      <input type="range" id="range-max" min="0" max="100" value="100" step="0.1">
+    </div>
+    <div class="slider-ticks" id="slider-ticks"></div>
+  </div>
+</div>
+
+<script>
+const MAPBOX_TOKEN = 'pk.eyJ1Ijoicm9hZGduYXIiLCJhIjoiY21seXAwOWxkMTBmazNlb2pua3RmZ2pkbSJ9.h8Udf10pTAeI4WQC1yzGgA';
+
+mapboxgl.accessToken = MAPBOX_TOKEN;
+
+const BUCKET_COLORS = {
+  0: '#00ff87',
+  1: '#7dd3fc',
+  2: '#fbbf24',
+  3: '#f97316',
+  4: '#dc2626',
+  5: '#6b7280'
+};
+
+const BUCKET_LABELS = {
+  0: '<1 year',
+  1: '1-3 years',
+  2: '3-5 years',
+  3: '>5 years',
+  4: 'No coverage',
+  5: 'Unknown date'
+};
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+let geojsonData = null;
+let hexGeojsonData = null;
+let map = null;
+let currentPopup = null;
+let hexHoverPopup = null;
+let hoveredHexId = null;
+
+// Slider state
+let dataMinYear = 2005;
+let dataMaxYear = 2026;
+let sliderMinVal = 2005;
+let sliderMaxVal = 2026;
+
+// Current layer mode
+let currentLayer = 'hex';
+
+// Initialize map
+map = new mapboxgl.Map({
+  container: 'map',
+  style: 'mapbox://styles/mapbox/dark-v11',
+  center: [-98.5, 39.8],
+  zoom: 4,
+  attributionControl: true
+});
+
+map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
+
+map.on('load', () => {
+  loadData();
+});
+
+async function loadData() {
+  try {
+    const [pointsRes, hexRes] = await Promise.all([
+      fetch('../data/freshness.geojson'),
+      fetch('../data/freshness_hex.geojson')
+    ]);
+    if (!pointsRes.ok) throw new Error(`Points HTTP ${pointsRes.status}`);
+    if (!hexRes.ok) throw new Error(`Hex HTTP ${hexRes.status}`);
+
+    geojsonData = await pointsRes.json();
+    hexGeojsonData = await hexRes.json();
+
+    // Compute data year range from points
+    let minY = Infinity, maxY = -Infinity;
+    geojsonData.features.forEach(f => {
+      const y = f.properties.y;
+      if (y != null && y > 0) {
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    });
+    if (minY !== Infinity) {
+      dataMinYear = Math.floor(minY);
+      dataMaxYear = Math.ceil(maxY);
+    }
+    sliderMinVal = dataMinYear;
+    sliderMaxVal = dataMaxYear;
+
+    initSlider();
+    addLayers();
+    computeAndDisplayStats();
+    updateLayerVisibility();
+
+    document.getElementById('loading-overlay').classList.add('hidden');
+  } catch (err) {
+    document.querySelector('.loading-text').textContent = 'Error loading data: ' + err.message;
+    document.querySelector('.loading-spinner').style.display = 'none';
+    console.error('Failed to load GeoJSON:', err);
+  }
+}
+
+// ==================== SLIDER ====================
+
+function initSlider() {
+  const rangeMin = document.getElementById('range-min');
+  const rangeMax = document.getElementById('range-max');
+
+  rangeMin.min = dataMinYear;
+  rangeMin.max = dataMaxYear;
+  rangeMin.value = dataMinYear;
+  rangeMin.step = 0.05;
+
+  rangeMax.min = dataMinYear;
+  rangeMax.max = dataMaxYear;
+  rangeMax.value = dataMaxYear;
+  rangeMax.step = 0.05;
+
+  sliderMinVal = dataMinYear;
+  sliderMaxVal = dataMaxYear;
+
+  updateSliderUI();
+  buildTicks();
+
+  rangeMin.addEventListener('input', onSliderInput);
+  rangeMax.addEventListener('input', onSliderInput);
+
+  document.getElementById('show-no-coverage').addEventListener('change', () => {
+    applyFilters();
+  });
+}
+
+function onSliderInput() {
+  const rangeMin = document.getElementById('range-min');
+  const rangeMax = document.getElementById('range-max');
+
+  let minVal = parseFloat(rangeMin.value);
+  let maxVal = parseFloat(rangeMax.value);
+
+  // Prevent crossing
+  if (minVal > maxVal - 0.2) {
+    if (this.id === 'range-min') {
+      minVal = maxVal - 0.2;
+      rangeMin.value = minVal;
+    } else {
+      maxVal = minVal + 0.2;
+      rangeMax.value = maxVal;
+    }
+  }
+
+  sliderMinVal = minVal;
+  sliderMaxVal = maxVal;
+
+  updateSliderUI();
+  applyFilters();
+  computeAndDisplayStats();
+}
+
+function updateSliderUI() {
+  const rangeMin = document.getElementById('range-min');
+  const rangeMax = document.getElementById('range-max');
+  const fill = document.getElementById('range-track-fill');
+  const label = document.getElementById('slider-range-label');
+
+  const pctMin = ((sliderMinVal - dataMinYear) / (dataMaxYear - dataMinYear)) * 100;
+  const pctMax = ((sliderMaxVal - dataMinYear) / (dataMaxYear - dataMinYear)) * 100;
+
+  fill.style.left = pctMin + '%';
+  fill.style.width = (pctMax - pctMin) + '%';
+
+  label.textContent = decimalYearToLabel(sliderMinVal) + '  \u2014  ' + decimalYearToLabel(sliderMaxVal);
+}
+
+function decimalYearToLabel(y) {
+  const year = Math.floor(y);
+  const monthFrac = (y - year) * 12;
+  const month = Math.min(11, Math.max(0, Math.round(monthFrac)));
+  return MONTH_NAMES[month] + ' ' + year;
+}
+
+function buildTicks() {
+  const container = document.getElementById('slider-ticks');
+  container.innerHTML = '';
+  const startYear = Math.ceil(dataMinYear);
+  const endYear = Math.floor(dataMaxYear);
+  // Show ticks every 2-3 years for cleanliness
+  const step = (endYear - startYear) > 15 ? 3 : 2;
+  for (let y = startYear; y <= endYear; y += step) {
+    const tick = document.createElement('span');
+    tick.className = 'slider-tick';
+    tick.textContent = y;
+    container.appendChild(tick);
+  }
+}
+
+function isSliderAtFullRange() {
+  return Math.abs(sliderMinVal - dataMinYear) < 0.1 && Math.abs(sliderMaxVal - dataMaxYear) < 0.1;
+}
+
+// ==================== LAYERS ====================
+
+function addLayers() {
+  // Points source
+  map.addSource('freshness', {
+    type: 'geojson',
+    data: geojsonData,
+    generateId: true
+  });
+
+  // Hex source
+  map.addSource('freshness-hex', {
+    type: 'geojson',
+    data: hexGeojsonData,
+    generateId: true
+  });
+
+  // --- Hex fill layer ---
+  map.addLayer({
+    id: 'hex-fill',
+    type: 'fill',
+    source: 'freshness-hex',
+    minzoom: 3,
+    paint: {
+      'fill-color': [
+        'match', ['get', 'b'],
+        0, '#00ff87',
+        1, '#7dd3fc',
+        2, '#fbbf24',
+        3, '#f97316',
+        4, '#dc2626',
+        5, '#6b7280',
+        '#6b7280'
+      ],
+      'fill-opacity': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 0.6,
+        7, 0.5,
+        10, 0.35,
+        14, 0.3
+      ]
+    }
+  });
+
+  // --- Hex border layer ---
+  map.addLayer({
+    id: 'hex-border',
+    type: 'line',
+    source: 'freshness-hex',
+    minzoom: 3,
+    paint: {
+      'line-color': 'rgba(255, 255, 255, 0.15)',
+      'line-width': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 0.5,
+        10, 0.3,
+        14, 0.2
+      ],
+      'line-opacity': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 0.5,
+        10, 0.2,
+        14, 0.15
+      ]
+    }
+  });
+
+  // --- Hex hover highlight ---
+  map.addLayer({
+    id: 'hex-hover',
+    type: 'fill',
+    source: 'freshness-hex',
+    minzoom: 3,
+    paint: {
+      'fill-color': '#ffffff',
+      'fill-opacity': [
+        'case',
+        ['boolean', ['feature-state', 'hover'], false],
+        0.15,
+        0
+      ]
+    }
+  });
+
+  // --- Staleness heatmap ---
+  map.addLayer({
+    id: 'freshness-heatmap',
+    type: 'heatmap',
+    source: 'freshness',
+    filter: ['!=', ['get', 'b'], 4],
+    layout: { visibility: 'none' },
+    paint: {
+      'heatmap-weight': [
+        'match', ['get', 'b'],
+        0, 0.05,
+        1, 0.25,
+        2, 0.6,
+        3, 1.0,
+        5, 0.3,
+        0.1
+      ],
+      'heatmap-intensity': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 0.8,
+        8, 1.2,
+        14, 1.5
+      ],
+      'heatmap-color': [
+        'interpolate', ['linear'], ['heatmap-density'],
+        0, 'rgba(0,0,0,0)',
+        0.15, 'rgba(0,200,130,0.4)',
+        0.3, 'rgba(100,220,200,0.5)',
+        0.5, 'rgba(255,200,50,0.65)',
+        0.7, 'rgba(255,120,20,0.8)',
+        0.9, 'rgba(240,50,30,0.9)',
+        1, 'rgba(200,0,0,1)'
+      ],
+      'heatmap-radius': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 12,
+        6, 20,
+        10, 35,
+        14, 50
+      ],
+      'heatmap-opacity': 0.85
+    }
+  });
+
+  // --- Coverage gaps heatmap ---
+  map.addLayer({
+    id: 'freshness-gaps',
+    type: 'heatmap',
+    source: 'freshness',
+    filter: ['==', ['get', 'b'], 4],
+    layout: { visibility: 'none' },
+    paint: {
+      'heatmap-weight': 1,
+      'heatmap-intensity': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 0.8,
+        8, 1.2,
+        14, 1.5
+      ],
+      'heatmap-color': [
+        'interpolate', ['linear'], ['heatmap-density'],
+        0, 'rgba(0,0,0,0)',
+        0.15, 'rgba(80,20,120,0.3)',
+        0.3, 'rgba(130,40,180,0.5)',
+        0.5, 'rgba(180,50,200,0.65)',
+        0.7, 'rgba(220,60,180,0.8)',
+        0.9, 'rgba(255,80,160,0.9)',
+        1, 'rgba(255,120,200,1)'
+      ],
+      'heatmap-radius': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 12,
+        6, 20,
+        10, 35,
+        14, 50
+      ],
+      'heatmap-opacity': 0.85
+    }
+  });
+
+  // --- Circle layer ---
+  map.addLayer({
+    id: 'freshness-circles',
+    type: 'circle',
+    source: 'freshness',
+    paint: {
+      'circle-radius': [
+        'interpolate', ['linear'], ['zoom'],
+        3, ['case', ['==', ['get', 'b'], 4], 0.6, 1],
+        6, ['case', ['==', ['get', 'b'], 4], 1.2, 2],
+        9, ['case', ['==', ['get', 'b'], 4], 2.4, 4],
+        12, ['case', ['==', ['get', 'b'], 4], 3.6, 6],
+        15, ['case', ['==', ['get', 'b'], 4], 6, 10]
+      ],
+      'circle-color': [
+        'match', ['get', 'b'],
+        0, '#00ff87',
+        1, '#7dd3fc',
+        2, '#fbbf24',
+        3, '#f97316',
+        4, '#dc2626',
+        5, '#6b7280',
+        '#6b7280'
+      ],
+      'circle-opacity': [
+        'interpolate', ['linear'], ['zoom'],
+        3, ['case', ['==', ['get', 'b'], 4], 0.5, 0.7],
+        10, ['case', ['==', ['get', 'b'], 4], 0.4, 0.6],
+        14, ['case', ['==', ['get', 'b'], 4], 0.35, 0.5]
+      ],
+      'circle-stroke-width': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 0,
+        8, 0,
+        9, 0.3,
+        14, 0.5
+      ],
+      'circle-stroke-color': 'rgba(255,255,255,0.2)',
+      'circle-stroke-opacity': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 0,
+        9, ['case', ['==', ['get', 'b'], 4], 0, 0.3],
+        14, ['case', ['==', ['get', 'b'], 4], 0, 0.3]
+      ]
+    }
+  });
+
+  // --- Circle hover highlight ---
+  map.addLayer({
+    id: 'freshness-highlight',
+    type: 'circle',
+    source: 'freshness',
+    paint: {
+      'circle-radius': [
+        'interpolate', ['linear'], ['zoom'],
+        3, 4,
+        9, 8,
+        15, 14
+      ],
+      'circle-color': [
+        'match', ['get', 'b'],
+        0, '#00ff87',
+        1, '#7dd3fc',
+        2, '#fbbf24',
+        3, '#f97316',
+        4, '#dc2626',
+        5, '#6b7280',
+        '#6b7280'
+      ],
+      'circle-opacity': 0.35,
+      'circle-stroke-width': 2,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-opacity': 0.7
+    },
+    filter: ['==', ['id'], '']
+  });
+
+  setupInteractions();
+}
+
+function setupInteractions() {
+  // Point hover
+  map.on('mousemove', 'freshness-circles', (e) => {
+    if (currentLayer !== 'points' && currentLayer !== 'hex') return;
+    map.getCanvas().style.cursor = 'pointer';
+    if (e.features.length > 0) {
+      map.setFilter('freshness-highlight', ['==', ['id'], e.features[0].id]);
+    }
+  });
+
+  map.on('mouseleave', 'freshness-circles', () => {
+    map.getCanvas().style.cursor = '';
+    map.setFilter('freshness-highlight', ['==', ['id'], '']);
+  });
+
+  // Point click popup
+  map.on('click', 'freshness-circles', (e) => {
+    if (!e.features.length) return;
+    if (currentLayer !== 'points' && currentLayer !== 'hex') return;
+
+    const f = e.features[0];
+    const props = f.properties;
+    const coords = e.lngLat;
+
+    if (currentPopup) currentPopup.remove();
+
+    const tier = props.t;
+    const bucket = props.b;
+    const city = props.c || '';
+    const state = props.st || '';
+    const population = props.p;
+    const imageDate = props.d || null;
+    const ageYears = props.a;
+
+    let title;
+    if (tier === 3 || (!city && !state)) {
+      title = 'Rural sample point';
+    } else {
+      title = city + (state ? ', ' + state : '');
+    }
+
+    let dateDisplay;
+    let dateClass = '';
+    if (bucket === 4) {
+      dateDisplay = 'No coverage';
+      dateClass = ' no-coverage';
+    } else if (!imageDate || bucket === 5) {
+      dateDisplay = 'Unknown';
+    } else {
+      dateDisplay = imageDate;
+    }
+
+    let bucketColorClass = '';
+    if (bucket >= 0 && bucket <= 3) bucketColorClass = ' bucket-' + bucket;
+
+    let ageDisplay = '';
+    if (bucket === 4) {
+      ageDisplay = '<span class="popup-row-value no-coverage">N/A</span>';
+    } else if (ageYears != null && ageYears >= 0) {
+      ageDisplay = '<span class="popup-row-value">' + ageYears.toFixed(1) + ' yr</span>';
+    } else {
+      ageDisplay = '<span class="popup-row-value">Unknown</span>';
+    }
+
+    let popupHtml = '<div class="popup-title">' + title + '</div>';
+    if (population && tier !== 3) {
+      popupHtml += '<div class="popup-row"><span class="popup-row-label">Population</span><span class="popup-row-value">' + Number(population).toLocaleString() + '</span></div>';
+    }
+    popupHtml += '<div class="popup-row"><span class="popup-row-label">Imagery date</span><span class="popup-row-value' + dateClass + '">' + dateDisplay + '</span></div>';
+    popupHtml += '<div class="popup-row"><span class="popup-row-label">Age</span>' + ageDisplay + '</div>';
+    popupHtml += '<div class="popup-row"><span class="popup-row-label">Category</span><span class="popup-row-value' + bucketColorClass + '">' + (BUCKET_LABELS[bucket] || 'Unknown') + '</span></div>';
+
+    currentPopup = new mapboxgl.Popup({ closeButton: true, maxWidth: '260px' })
+      .setLngLat(coords)
+      .setHTML(popupHtml)
+      .addTo(map);
+  });
+
+  // Hex hover
+  map.on('mousemove', 'hex-fill', (e) => {
+    if (currentLayer !== 'hex') return;
+    map.getCanvas().style.cursor = 'pointer';
+
+    if (e.features.length > 0) {
+      // Clear previous hover state
+      if (hoveredHexId !== null) {
+        map.setFeatureState({ source: 'freshness-hex', id: hoveredHexId }, { hover: false });
+      }
+      hoveredHexId = e.features[0].id;
+      map.setFeatureState({ source: 'freshness-hex', id: hoveredHexId }, { hover: true });
+
+      const props = e.features[0].properties;
+      const n = props.n || 0;
+      const avgAge = props.aa != null ? props.aa.toFixed(1) : 'N/A';
+      const ncPct = props.nc != null ? props.nc.toFixed(1) : 'N/A';
+      const okCount = props.ok || 0;
+
+      let html = '<div class="popup-title">Hex Summary</div>';
+      html += '<div class="popup-row"><span class="popup-row-label">Total points</span><span class="popup-row-value">' + n + '</span></div>';
+      html += '<div class="popup-row"><span class="popup-row-label">With coverage</span><span class="popup-row-value">' + okCount + '</span></div>';
+      html += '<div class="popup-row"><span class="popup-row-label">Avg age</span><span class="popup-row-value">' + avgAge + ' yr</span></div>';
+      html += '<div class="popup-row"><span class="popup-row-label">No coverage</span><span class="popup-row-value' + (parseFloat(ncPct) > 30 ? ' no-coverage' : '') + '">' + ncPct + '%</span></div>';
+
+      if (hexHoverPopup) hexHoverPopup.remove();
+      hexHoverPopup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, maxWidth: '240px', offset: 12 })
+        .setLngLat(e.lngLat)
+        .setHTML(html)
+        .addTo(map);
+    }
+  });
+
+  map.on('mouseleave', 'hex-fill', () => {
+    map.getCanvas().style.cursor = '';
+    if (hoveredHexId !== null) {
+      map.setFeatureState({ source: 'freshness-hex', id: hoveredHexId }, { hover: false });
+      hoveredHexId = null;
+    }
+    if (hexHoverPopup) {
+      hexHoverPopup.remove();
+      hexHoverPopup = null;
+    }
+  });
+}
+
+// ==================== FILTERS ====================
+
+function getVisibleTiers() {
+  const tiers = [];
+  if (document.getElementById('tier-1').checked) tiers.push(1);
+  if (document.getElementById('tier-2').checked) tiers.push(2);
+  if (document.getElementById('tier-3').checked) tiers.push(3);
+  return tiers;
+}
+
+function buildTierFilter(tiers) {
+  if (tiers.length === 0) return ['==', ['get', 't'], -1];
+  if (tiers.length === 3) return null;
+  return ['in', ['get', 't'], ['literal', tiers]];
+}
+
+function buildDateFilter() {
+  if (isSliderAtFullRange()) return null;
+  // Points with y: filter by range. Points without y (no coverage): controlled by toggle.
+  return null; // We handle this specially below
+}
+
+function applyFilters() {
+  const tiers = getVisibleTiers();
+  const tierFilter = buildTierFilter(tiers);
+  const showNoCoverage = document.getElementById('show-no-coverage').checked;
+  const atFullRange = isSliderAtFullRange();
+
+  // Build combined filter for point layers
+  // Date filter: features with y in range, OR features without y (if toggle on)
+  const conditions = [];
+
+  if (tierFilter) conditions.push(tierFilter);
+
+  if (!atFullRange) {
+    // Date filtering: include if (has y AND y in range) OR (no y AND showNoCoverage)
+    const dateCondition = [
+      'any',
+      [
+        'all',
+        ['has', 'y'],
+        ['>=', ['get', 'y'], sliderMinVal],
+        ['<=', ['get', 'y'], sliderMaxVal]
+      ],
+      showNoCoverage
+        ? ['!', ['has', 'y']]
+        : ['==', 1, 0] // false - exclude no-y features
+    ];
+    conditions.push(dateCondition);
+  } else if (!showNoCoverage) {
+    // Full range but hiding no-coverage
+    conditions.push(['has', 'y']);
+  }
+
+  const circleFilter = conditions.length === 0 ? null
+    : conditions.length === 1 ? conditions[0]
+    : ['all', ...conditions];
+
+  // Apply to circle layers
+  ['freshness-circles', 'freshness-highlight'].forEach(layerId => {
+    if (map.getLayer(layerId)) {
+      map.setFilter(layerId, circleFilter);
+    }
+  });
+
+  // Staleness heatmap: same as circle but also exclude bucket 4
+  if (map.getLayer('freshness-heatmap')) {
+    const heatConditions = [['!=', ['get', 'b'], 4]];
+    if (tierFilter) heatConditions.push(tierFilter);
+    if (!atFullRange) {
+      heatConditions.push([
+        'all',
+        ['has', 'y'],
+        ['>=', ['get', 'y'], sliderMinVal],
+        ['<=', ['get', 'y'], sliderMaxVal]
+      ]);
+    }
+    map.setFilter('freshness-heatmap', heatConditions.length === 1 ? heatConditions[0] : ['all', ...heatConditions]);
+  }
+
+  // Gaps heatmap: same tier filter + only bucket 4
+  if (map.getLayer('freshness-gaps')) {
+    const gapsConditions = [['==', ['get', 'b'], 4]];
+    if (tierFilter) gapsConditions.push(tierFilter);
+    map.setFilter('freshness-gaps', gapsConditions.length === 1 ? gapsConditions[0] : ['all', ...gapsConditions]);
+  }
+
+  // Hex layer is NOT filtered by date slider (always full picture)
+  // but we do NOT apply tier filter to hex either (hex is pre-aggregated)
+
+  // Update filter subtitle
+  updateFilterSubtitle();
+  computeAndDisplayStats();
+}
+
+function updateFilterSubtitle() {
+  const el = document.getElementById('filter-subtitle');
+  if (!isSliderAtFullRange() && geojsonData) {
+    const tiers = getVisibleTiers();
+    const showNoCoverage = document.getElementById('show-no-coverage').checked;
+    const total = geojsonData.features.filter(f => tiers.includes(f.properties.t)).length;
+    const filtered = geojsonData.features.filter(f => {
+      if (!tiers.includes(f.properties.t)) return false;
+      const y = f.properties.y;
+      if (y != null) return y >= sliderMinVal && y <= sliderMaxVal;
+      return showNoCoverage;
+    }).length;
+    el.textContent = 'Filtered: ' + fmt(filtered) + ' of ' + fmt(total) + ' points';
+    el.classList.add('visible');
+  } else {
+    el.classList.remove('visible');
+  }
+}
+
+// ==================== LAYER VISIBILITY ====================
+
+function updateLayerVisibility() {
+  const hexVisible = currentLayer === 'hex';
+  const pointsVisible = currentLayer === 'points';
+  const heatmapVisible = currentLayer === 'heatmap';
+  const gapsVisible = currentLayer === 'gaps';
+
+  map.setLayoutProperty('hex-fill', 'visibility', hexVisible ? 'visible' : 'none');
+  map.setLayoutProperty('hex-border', 'visibility', hexVisible ? 'visible' : 'none');
+  map.setLayoutProperty('hex-hover', 'visibility', hexVisible ? 'visible' : 'none');
+
+  map.setLayoutProperty('freshness-circles', 'visibility', pointsVisible ? 'visible' : 'none');
+  map.setLayoutProperty('freshness-highlight', 'visibility', pointsVisible ? 'visible' : 'none');
+
+  map.setLayoutProperty('freshness-heatmap', 'visibility', heatmapVisible ? 'visible' : 'none');
+  map.setLayoutProperty('freshness-gaps', 'visibility', gapsVisible ? 'visible' : 'none');
+}
+
+// ==================== STATS ====================
+
+function fmt(n) {
+  return n.toLocaleString();
+}
+
+function computeAndDisplayStats() {
+  if (!geojsonData) return;
+
+  const tiers = getVisibleTiers();
+  const atFullRange = isSliderAtFullRange();
+  const showNoCoverage = document.getElementById('show-no-coverage') ? document.getElementById('show-no-coverage').checked : true;
+
+  // Filter features by tier and optionally by date range
+  const features = geojsonData.features.filter(f => {
+    if (!tiers.includes(f.properties.t)) return false;
+    if (!atFullRange) {
+      const y = f.properties.y;
+      if (y != null) return y >= sliderMinVal && y <= sliderMaxVal;
+      return showNoCoverage;
+    }
+    return true;
+  });
+
+  const total = features.length;
+  const bucketCounts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  features.forEach(f => {
+    const b = f.properties.b;
+    if (b in bucketCounts) bucketCounts[b]++;
+  });
+
+  const noCoverage = bucketCounts[4];
+  const over3yr = bucketCounts[2] + bucketCounts[3];
+
+  // Compute median and average age
+  const ages = features
+    .map(f => f.properties.a)
+    .filter(a => a != null && a >= 0)
+    .sort((a, b) => a - b);
+
+  let medianAge = null;
+  let avgAge = null;
+  if (ages.length > 0) {
+    const mid = Math.floor(ages.length / 2);
+    medianAge = ages.length % 2 === 0 ? (ages[mid - 1] + ages[mid]) / 2 : ages[mid];
+    avgAge = ages.reduce((s, a) => s + a, 0) / ages.length;
+  }
+
+  document.getElementById('stat-total').textContent = total > 0 ? fmt(total) : '--';
+  document.getElementById('stat-no-coverage').textContent = total > 0 ? fmt(noCoverage) : '--';
+  document.getElementById('stat-no-coverage-pct').textContent = total > 0 ? (noCoverage / total * 100).toFixed(1) + '% of total' : '';
+  document.getElementById('stat-median-age').textContent = medianAge != null ? medianAge.toFixed(1) + ' yr' : '--';
+  document.getElementById('stat-avg-age').textContent = avgAge != null ? 'avg ' + avgAge.toFixed(1) + ' yr' : '';
+  document.getElementById('stat-over-3yr').textContent = total > 0 ? fmt(over3yr) : '--';
+  document.getElementById('stat-over-3yr-pct').textContent = total > 0 ? (over3yr / total * 100).toFixed(1) + '% of total' : '';
+
+  // Legend counts
+  for (let b = 0; b <= 5; b++) {
+    const el = document.getElementById('legend-count-' + b);
+    if (el) el.textContent = fmt(bucketCounts[b]);
+  }
+}
+
+// ==================== EVENT LISTENERS ====================
+
+// Layer toggle
+document.querySelectorAll('input[name="layer"]').forEach(radio => {
+  radio.addEventListener('change', (e) => {
+    currentLayer = e.target.value;
+    updateLayerVisibility();
+  });
+});
+
+// Tier filter
+['tier-1', 'tier-2', 'tier-3'].forEach(id => {
+  document.getElementById(id).addEventListener('change', applyFilters);
+});
+</script>
+</body>
+</html>
