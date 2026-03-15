@@ -3,9 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Google Street View Freshness - US Coverage Analysis</title>
-<link href="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.css" rel="stylesheet">
-<script src="https://api.mapbox.com/mapbox-gl-js/v3.9.4/mapbox-gl.js"></script>
+<title>Is Your City Driving Blind? | Street View Freshness Map</title>
+
+<!-- OG / Social Sharing -->
+<meta property="og:title" content="Is Your City Driving Blind? Check How Old Your Street View Imagery Is">
+<meta property="og:description" content="37% of US roads have no Street View at all. 29% of existing imagery is over 3 years old. Search your city and see when Google last drove your roads. Free interactive map by CYVL.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://streetview.cyvl.com">
+<meta property="og:image" content="https://streetview.cyvl.com/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Is Your City Driving Blind? Check Your Street View Freshness">
+<meta name="twitter:description" content="37% of US roads have no Street View. 29% of imagery is over 3 years old. Search your city.">
+<meta name="twitter:image" content="https://streetview.cyvl.com/og-image.png">
+<meta name="description" content="Interactive map showing how outdated Google Street View imagery is in every US city. Search your city, see the data, and request fresh imagery from CYVL.">
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📍</text></svg>">
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@3.2.0/dist/pmtiles.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -18,444 +33,512 @@
 
   #map { position: absolute; inset: 0; }
 
-  /* Loading overlay */
+  /* ==================== LOADING ==================== */
   #loading-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 1000;
+    position: fixed; inset: 0; z-index: 1000;
     background: rgba(10, 10, 10, 0.95);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
     transition: opacity 0.6s ease, visibility 0.6s ease;
   }
-  #loading-overlay.hidden {
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-  }
+  #loading-overlay.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
   .loading-spinner {
-    width: 48px;
-    height: 48px;
-    border: 3px solid rgba(255, 255, 255, 0.08);
+    width: 48px; height: 48px;
+    border: 3px solid rgba(255,255,255,0.08);
     border-top-color: #DAFF00;
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .loading-text {
-    margin-top: 16px;
-    font-size: 13px;
-    color: #737373;
-    letter-spacing: 0.03em;
-  }
+  .loading-text { margin-top: 16px; font-size: 13px; color: #737373; letter-spacing: 0.03em; }
 
-  /* Info panel */
-  #panel {
-    position: absolute;
-    top: 16px;
-    left: 16px;
-    z-index: 10;
-    background: rgba(13, 13, 12, 0.92);
-    backdrop-filter: blur(24px) saturate(1.2);
-    -webkit-backdrop-filter: blur(24px) saturate(1.2);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 16px;
-    padding: 24px;
-    width: 300px;
-    box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
-    transition: box-shadow 0.3s ease;
+  /* ==================== TOP BAR ==================== */
+  #top-bar {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 20;
+    background: linear-gradient(to bottom, rgba(10,10,10,0.95) 0%, rgba(10,10,10,0.8) 70%, transparent 100%);
+    padding: 12px 20px 24px 20px;
+    display: flex; align-items: center; gap: 16px;
+    pointer-events: none;
   }
-  #panel h1 {
-    font-size: 16px;
-    font-weight: 700;
-    color: #f5f5f5;
-    letter-spacing: -0.025em;
-    line-height: 1.3;
-  }
-  #panel .subtitle {
-    font-size: 10px;
-    color: #525252;
-    margin-top: 3px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    font-weight: 600;
-  }
-  #panel .filter-subtitle {
-    font-size: 11px;
-    color: #DAFF00;
-    margin-top: 4px;
-    font-weight: 500;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-    height: 0;
-    overflow: hidden;
-  }
-  #panel .filter-subtitle.visible {
-    opacity: 1;
-    height: auto;
-    margin-top: 6px;
-  }
+  #top-bar > * { pointer-events: auto; }
 
-  /* Stats */
-  .stats {
-    margin-top: 20px;
-    padding-top: 20px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    text-decoration: none; flex-shrink: 0;
   }
-  .stat {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
+  .brand-logo {
+    font-size: 18px; font-weight: 800; color: #DAFF00;
+    letter-spacing: -0.04em;
   }
-  .stat-value {
-    font-size: 20px;
-    font-weight: 700;
-    color: #f5f5f5;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.02em;
-    line-height: 1.2;
-    transition: color 0.3s ease;
+  .brand-sep {
+    width: 1px; height: 20px; background: rgba(255,255,255,0.12);
   }
-  .stat-sub {
-    font-size: 11px;
-    color: #525252;
-    font-variant-numeric: tabular-nums;
-    margin-top: -1px;
-  }
-  .stat-value.danger { color: #f87171; }
-  .stat-value.warning { color: #fbbf24; }
-  .stat-value.accent { color: #DAFF00; }
-  .stat-label {
-    font-size: 11px;
-    color: #525252;
-    letter-spacing: 0.02em;
-    font-weight: 500;
-  }
-
-  /* Controls */
-  .controls {
-    margin-top: 20px;
-    padding-top: 20px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
-  }
-  .control-group {
-    margin-bottom: 14px;
-  }
-  .control-group:last-child { margin-bottom: 0; }
-  .control-label {
-    font-size: 10px;
-    color: #525252;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin-bottom: 8px;
-    font-weight: 600;
-  }
-  .radio-group, .checkbox-group {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .radio-group { flex-direction: row; gap: 4px; flex-wrap: wrap; }
-  .radio-group label {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 7px 6px;
-    font-size: 10.5px;
-    font-weight: 500;
-    color: #737373;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    user-select: none;
+  .brand-title {
+    font-size: 13px; font-weight: 600; color: #d4d4d4;
+    letter-spacing: -0.01em;
     white-space: nowrap;
   }
-  .radio-group label:hover {
-    background: rgba(255, 255, 255, 0.06);
-    color: #d4d4d4;
+
+  /* Search */
+  #search-wrap {
+    flex: 1; max-width: 420px; position: relative;
   }
+  #city-search {
+    width: 100%;
+    padding: 10px 14px 10px 36px;
+    font-size: 14px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    color: #f5f5f5;
+    outline: none;
+    transition: border-color 0.2s, background 0.2s;
+    font-family: inherit;
+  }
+  #city-search::placeholder { color: #525252; }
+  #city-search:focus {
+    border-color: rgba(218,255,0,0.4);
+    background: rgba(255,255,255,0.08);
+  }
+  .search-icon {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    color: #525252; font-size: 14px; pointer-events: none;
+  }
+  #search-results {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: rgba(13,13,12,0.96);
+    backdrop-filter: blur(24px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    max-height: 280px; overflow-y: auto;
+    display: none;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.7);
+  }
+  #search-results.visible { display: block; }
+  .search-result-item {
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #d4d4d4;
+    cursor: pointer;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .search-result-item:last-child { border-bottom: none; }
+  .search-result-item:hover { background: rgba(218,255,0,0.06); }
+  .search-result-city { font-weight: 500; }
+  .search-result-age {
+    font-size: 11px; font-weight: 600; padding: 2px 8px;
+    border-radius: 6px; white-space: nowrap;
+  }
+  .age-bad { background: rgba(212,101,74,0.15); color: #D4654A; }
+  .age-terrible { background: rgba(139,58,74,0.2); color: #B85A6A; }
+  .age-ok { background: rgba(232,168,73,0.15); color: #E8A849; }
+  .age-good { background: rgba(46,204,113,0.12); color: #2ECC71; }
+
+  /* Share button */
+  .share-btn {
+    padding: 9px 14px; font-size: 12px; font-weight: 600;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px;
+    color: #a3a3a3; cursor: pointer;
+    transition: all 0.2s; white-space: nowrap;
+    font-family: inherit;
+  }
+  .share-btn:hover { background: rgba(255,255,255,0.1); color: #f5f5f5; }
+
+  /* ==================== CITY REPORT CARD ==================== */
+  #city-card {
+    position: absolute; top: 64px; left: 16px; z-index: 15;
+    background: rgba(13,13,12,0.94);
+    backdrop-filter: blur(24px) saturate(1.2);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 0;
+    width: 320px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+    display: none;
+    overflow: hidden;
+  }
+  #city-card.visible { display: block; }
+
+  .card-header {
+    padding: 20px 20px 0 20px;
+  }
+  .card-header-top {
+    display: flex; justify-content: space-between; align-items: flex-start;
+  }
+  .card-city-name {
+    font-size: 18px; font-weight: 700; color: #f5f5f5;
+    letter-spacing: -0.025em; line-height: 1.2;
+  }
+  .card-close {
+    background: none; border: none; color: #525252;
+    font-size: 20px; cursor: pointer; padding: 0 0 0 8px;
+    line-height: 1; transition: color 0.15s;
+  }
+  .card-close:hover { color: #e5e5e5; }
+  .card-grade {
+    display: inline-block; margin-top: 8px;
+    padding: 4px 12px; border-radius: 8px;
+    font-size: 13px; font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  .grade-f { background: rgba(220,38,38,0.15); color: #ef4444; }
+  .grade-d { background: rgba(212,101,74,0.15); color: #D4654A; }
+  .grade-c { background: rgba(232,168,73,0.15); color: #E8A849; }
+  .grade-b { background: rgba(108,180,217,0.15); color: #6CB4D9; }
+  .grade-a { background: rgba(46,204,113,0.12); color: #2ECC71; }
+
+  .card-stats {
+    padding: 16px 20px;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .card-stat-value {
+    font-size: 22px; font-weight: 700; color: #f5f5f5;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em; line-height: 1.2;
+  }
+  .card-stat-label {
+    font-size: 11px; color: #525252; font-weight: 500; margin-top: 2px;
+  }
+  .card-stat-value.danger { color: #f87171; }
+  .card-stat-value.warning { color: #E8A849; }
+  .card-stat-value.accent { color: #DAFF00; }
+
+  .card-breakdown {
+    padding: 0 20px 16px 20px;
+  }
+  .card-breakdown-bar {
+    display: flex; height: 8px; border-radius: 4px; overflow: hidden; gap: 2px;
+  }
+  .card-breakdown-bar > div { border-radius: 2px; transition: width 0.4s ease; }
+  .card-breakdown-labels {
+    display: flex; justify-content: space-between; margin-top: 6px;
+    font-size: 10px; color: #525252;
+  }
+
+  .card-cta {
+    padding: 16px 20px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    background: rgba(218,255,0,0.02);
+  }
+  .card-cta-text {
+    font-size: 12px; color: #a3a3a3; line-height: 1.5; margin-bottom: 12px;
+  }
+  .card-cta-text strong { color: #DAFF00; }
+
+  .card-share-row {
+    display: flex; gap: 6px; margin-top: 10px;
+  }
+  .card-share-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    color: #737373; cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none; font-family: inherit;
+  }
+  .card-share-btn:hover { background: rgba(255,255,255,0.08); color: #d4d4d4; }
+  .card-share-btn svg { flex-shrink: 0; }
+
+  /* ==================== INFO PANEL (default, no city selected) ==================== */
+  #panel {
+    position: absolute; top: 64px; left: 16px; z-index: 10;
+    background: rgba(13,13,12,0.92);
+    backdrop-filter: blur(24px) saturate(1.2);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 24px;
+    width: 320px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+  }
+  #panel h1 {
+    font-size: 16px; font-weight: 700; color: #f5f5f5;
+    letter-spacing: -0.025em; line-height: 1.3;
+  }
+  #panel .subtitle {
+    font-size: 10px; color: #525252; margin-top: 3px;
+    letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600;
+  }
+  #panel .filter-subtitle {
+    font-size: 11px; color: #DAFF00; margin-top: 4px; font-weight: 500;
+    opacity: 0; transition: opacity 0.3s ease; height: 0; overflow: hidden;
+  }
+  #panel .filter-subtitle.visible { opacity: 1; height: auto; margin-top: 6px; }
+
+  .stats {
+    margin-top: 20px; padding-top: 20px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  .stat { display: flex; flex-direction: column; gap: 3px; }
+  .stat-value {
+    font-size: 20px; font-weight: 700; color: #f5f5f5;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em; line-height: 1.2;
+    transition: color 0.3s ease;
+  }
+  .stat-sub { font-size: 11px; color: #525252; font-variant-numeric: tabular-nums; margin-top: -1px; }
+  .stat-value.danger { color: #f87171; }
+  .stat-value.warning { color: #E8A849; }
+  .stat-value.accent { color: #DAFF00; }
+  .stat-label { font-size: 11px; color: #525252; letter-spacing: 0.02em; font-weight: 500; }
+
+  .controls {
+    margin-top: 20px; padding-top: 20px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  .control-group { margin-bottom: 14px; }
+  .control-group:last-child { margin-bottom: 0; }
+  .control-label {
+    font-size: 10px; color: #525252; text-transform: uppercase;
+    letter-spacing: 0.08em; margin-bottom: 8px; font-weight: 600;
+  }
+  .radio-group, .checkbox-group { display: flex; flex-direction: column; gap: 6px; }
+  .radio-group { flex-direction: row; gap: 4px; flex-wrap: wrap; }
+  .radio-group label {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    padding: 7px 6px; font-size: 10.5px; font-weight: 500; color: #737373;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px; cursor: pointer; transition: all 0.2s;
+    user-select: none; white-space: nowrap;
+  }
+  .radio-group label:hover { background: rgba(255,255,255,0.06); color: #d4d4d4; }
   .radio-group input:checked + label {
-    background: rgba(218, 255, 0, 0.1);
-    border-color: rgba(218, 255, 0, 0.25);
+    background: rgba(218,255,0,0.1);
+    border-color: rgba(218,255,0,0.25);
     color: #DAFF00;
   }
   .radio-group input { display: none; }
-
   .checkbox-group label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: #737373;
-    cursor: pointer;
-    transition: color 0.15s ease;
-    user-select: none;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #737373; cursor: pointer;
+    transition: color 0.15s; user-select: none;
   }
   .checkbox-group label:hover { color: #d4d4d4; }
   .checkbox-group input[type="checkbox"] {
-    width: 14px;
-    height: 14px;
-    accent-color: #DAFF00;
-    cursor: pointer;
+    width: 14px; height: 14px; accent-color: #DAFF00; cursor: pointer;
   }
 
-  /* Legend */
+  /* ==================== LEGEND ==================== */
   #legend {
-    position: absolute;
-    bottom: 120px;
-    left: 16px;
-    z-index: 10;
-    background: rgba(13, 13, 12, 0.92);
+    position: absolute; bottom: 16px; left: 16px; z-index: 10;
+    background: rgba(13,13,12,0.92);
     backdrop-filter: blur(24px) saturate(1.2);
-    -webkit-backdrop-filter: blur(24px) saturate(1.2);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255,255,255,0.08);
     border-radius: 12px;
     padding: 14px 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    display: flex; flex-direction: column; gap: 7px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
     min-width: 180px;
   }
   .legend-title {
-    font-size: 10px;
-    color: #525252;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-weight: 600;
-    margin-bottom: 2px;
+    font-size: 10px; color: #525252; text-transform: uppercase;
+    letter-spacing: 0.08em; font-weight: 600; margin-bottom: 2px;
   }
   .legend-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: #737373;
-    white-space: nowrap;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: #737373; white-space: nowrap;
     font-variant-numeric: tabular-nums;
   }
-  .legend-swatch {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .legend-label {
-    flex: 1;
-  }
+  .legend-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .legend-label { flex: 1; }
   .legend-count {
-    font-size: 11px;
-    color: #404040;
-    font-weight: 500;
-    font-variant-numeric: tabular-nums;
+    font-size: 11px; color: #404040; font-weight: 500; font-variant-numeric: tabular-nums;
   }
 
-  /* Popup styling */
-  .mapboxgl-popup-content {
-    background: rgba(13, 13, 12, 0.96) !important;
+  /* ==================== POPUP ==================== */
+  .maplibregl-popup-content {
+    background: rgba(13,13,12,0.96) !important;
     backdrop-filter: blur(24px) saturate(1.2);
-    -webkit-backdrop-filter: blur(24px) saturate(1.2);
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    border: 1px solid rgba(255,255,255,0.1) !important;
     border-radius: 14px !important;
     padding: 16px 18px !important;
-    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7) !important;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.7) !important;
     color: #e5e5e5;
-    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    min-width: 200px;
+    font-family: inherit;
+    min-width: 220px;
   }
-  .mapboxgl-popup-tip {
-    border-top-color: rgba(13, 13, 12, 0.96) !important;
+  .maplibregl-popup-tip { border-top-color: rgba(13,13,12,0.96) !important; }
+  .maplibregl-popup-close-button {
+    color: #525252 !important; font-size: 18px !important;
+    padding: 4px 8px !important; transition: color 0.15s !important;
   }
-  .mapboxgl-popup-close-button {
-    color: #525252 !important;
-    font-size: 18px !important;
-    padding: 4px 8px !important;
-    transition: color 0.15s ease !important;
-  }
-  .mapboxgl-popup-close-button:hover { color: #e5e5e5 !important; }
+  .maplibregl-popup-close-button:hover { color: #e5e5e5 !important; }
   .popup-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: #f5f5f5;
-    margin-bottom: 10px;
-    letter-spacing: -0.01em;
+    font-size: 14px; font-weight: 600; color: #f5f5f5;
+    margin-bottom: 10px; letter-spacing: -0.01em;
   }
   .popup-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 12px;
-    padding: 4px 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 12px; padding: 4px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
   }
   .popup-row:last-child { border-bottom: none; }
   .popup-row-label { color: #525252; font-weight: 500; }
   .popup-row-value { color: #d4d4d4; font-weight: 500; }
-  .popup-row-value.no-coverage { color: #dc2626; font-weight: 600; }
-  .popup-row-value.bucket-0 { color: #00ff87; }
-  .popup-row-value.bucket-1 { color: #7dd3fc; }
-  .popup-row-value.bucket-2 { color: #fbbf24; }
-  .popup-row-value.bucket-3 { color: #f97316; }
-
-  /* =====================================================
-     DUAL-HANDLE DATE RANGE SLIDER
-     ===================================================== */
-  #date-slider-container {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    z-index: 10;
-    background: linear-gradient(to top, rgba(10, 10, 10, 0.95) 0%, rgba(10, 10, 10, 0.85) 60%, transparent 100%);
-    padding: 12px 48px 20px 48px;
-    pointer-events: none;
+  .popup-row-value.no-coverage { color: #B85A6A; font-weight: 600; }
+  .popup-row-value.bucket-0 { color: #2ECC71; }
+  .popup-row-value.bucket-1 { color: #6CB4D9; }
+  .popup-row-value.bucket-2 { color: #E8A849; }
+  .popup-row-value.bucket-3 { color: #D4654A; }
+  .popup-cta {
+    margin-top: 12px; padding-top: 12px;
+    border-top: 1px solid rgba(255,255,255,0.06);
   }
-  #date-slider-inner {
-    pointer-events: auto;
-    max-width: 1200px;
-    margin: 0 auto;
+  .popup-cta-btn {
+    display: block; width: 100%; padding: 8px; text-align: center;
+    font-size: 12px; font-weight: 600;
+    background: #DAFF00; color: #0a0a0a;
+    border: none; border-radius: 8px; cursor: pointer;
+    text-decoration: none;
+    transition: opacity 0.2s;
+  }
+  .popup-cta-btn:hover { opacity: 0.85; }
+
+  /* ==================== CTA BANNER (top-right) ==================== */
+  #cta-banner {
+    position: absolute; top: 60px; right: 16px; z-index: 15;
+    background: rgba(13,13,12,0.94);
+    backdrop-filter: blur(24px);
+    border: 1px solid rgba(218,255,0,0.15);
+    border-radius: 14px;
+    padding: 16px 18px;
+    width: 260px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+  }
+  .cta-banner-title {
+    font-size: 15px; font-weight: 700; color: #f5f5f5;
+    letter-spacing: -0.02em; line-height: 1.3;
+  }
+  .cta-banner-sub {
+    font-size: 12px; color: #737373; margin-top: 6px; line-height: 1.5;
+  }
+  .cta-use-cases {
+    display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px;
+  }
+  .cta-use-case {
+    padding: 4px 8px; font-size: 10px; font-weight: 500;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 6px; color: #737373;
+  }
+  .cta-btn-primary {
+    display: block; width: 100%; margin-top: 14px; padding: 11px;
+    text-align: center; font-size: 13px; font-weight: 700;
+    background: #DAFF00; color: #0a0a0a;
+    border: none; border-radius: 10px; cursor: pointer;
+    text-decoration: none; transition: opacity 0.2s;
+    font-family: inherit;
+  }
+  .cta-btn-primary:hover { opacity: 0.85; }
+  .cta-btn-secondary {
+    display: block; width: 100%; margin-top: 6px; padding: 9px;
+    text-align: center; font-size: 12px; font-weight: 600;
+    background: transparent; color: #DAFF00;
+    border: 1px solid rgba(218,255,0,0.2);
+    border-radius: 10px; cursor: pointer;
+    text-decoration: none; transition: all 0.2s;
+    font-family: inherit;
+  }
+  .cta-btn-secondary:hover { background: rgba(218,255,0,0.06); }
+  .cta-price {
+    font-size: 11px; color: #525252; text-align: center; margin-top: 8px;
+  }
+  .cta-price strong { color: #a3a3a3; }
+
+  /* ==================== REQUEST MODAL ==================== */
+  #request-modal-overlay {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(8px);
+    display: none; align-items: center; justify-content: center;
+  }
+  #request-modal-overlay.visible { display: flex; }
+  #request-modal {
+    background: #111; border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 20px; padding: 32px;
+    width: 420px; max-width: calc(100vw - 32px);
+    box-shadow: 0 24px 80px rgba(0,0,0,0.8);
     position: relative;
   }
-  .slider-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
+  .modal-close {
+    position: absolute; top: 16px; right: 16px;
+    background: none; border: none; color: #525252;
+    font-size: 22px; cursor: pointer; transition: color 0.15s;
   }
-  .slider-range-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: #DAFF00;
-    letter-spacing: -0.01em;
-    font-variant-numeric: tabular-nums;
+  .modal-close:hover { color: #e5e5e5; }
+  .modal-title {
+    font-size: 20px; font-weight: 700; color: #f5f5f5;
+    letter-spacing: -0.025em;
   }
-  .slider-no-coverage-toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    color: #525252;
+  .modal-sub {
+    font-size: 13px; color: #737373; margin-top: 6px; line-height: 1.5;
+  }
+  .modal-form { margin-top: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .modal-input {
+    width: 100%; padding: 11px 14px; font-size: 14px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; color: #f5f5f5;
+    outline: none; transition: border-color 0.2s;
+    font-family: inherit;
+  }
+  .modal-input::placeholder { color: #525252; }
+  .modal-input:focus { border-color: rgba(218,255,0,0.4); }
+  .modal-input-row { display: flex; gap: 8px; }
+  .modal-input-row .modal-input { flex: 1; }
+  .modal-select {
+    width: 100%; padding: 11px 14px; font-size: 14px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; color: #f5f5f5;
+    outline: none; font-family: inherit;
+    -webkit-appearance: none; appearance: none;
     cursor: pointer;
-    user-select: none;
-    transition: color 0.15s ease;
   }
-  .slider-no-coverage-toggle:hover { color: #a3a3a3; }
-  .slider-no-coverage-toggle input {
-    accent-color: #DAFF00;
-    width: 13px;
-    height: 13px;
-    cursor: pointer;
+  .modal-select option { background: #1a1a1a; color: #f5f5f5; }
+  .modal-divider {
+    border: none; border-top: 1px solid rgba(255,255,255,0.06); margin: 4px 0;
   }
-
-  .range-slider-wrap {
-    position: relative;
-    height: 36px;
-    display: flex;
-    align-items: center;
+  .modal-stripe-btn {
+    display: block; width: 100%; padding: 13px; text-align: center;
+    font-size: 14px; font-weight: 700;
+    background: #DAFF00; color: #0a0a0a;
+    border: none; border-radius: 10px; cursor: pointer;
+    text-decoration: none; transition: opacity 0.2s;
+    font-family: inherit;
   }
-
-  .range-track {
-    position: absolute;
-    left: 0;
-    right: 0;
-    height: 4px;
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 2px;
-    top: 50%;
-    transform: translateY(-50%);
+  .modal-stripe-btn:hover { opacity: 0.85; }
+  .modal-alt {
+    text-align: center; margin-top: 8px;
   }
-  .range-track-fill {
-    position: absolute;
-    height: 4px;
-    background: #DAFF00;
-    border-radius: 2px;
-    top: 50%;
-    transform: translateY(-50%);
-    opacity: 0.7;
-    transition: opacity 0.15s ease;
+  .modal-alt a {
+    font-size: 12px; color: #DAFF00; text-decoration: none; font-weight: 500;
+  }
+  .modal-alt a:hover { text-decoration: underline; }
+  .modal-trust {
+    text-align: center; margin-top: 12px;
+    font-size: 11px; color: #404040; line-height: 1.5;
   }
 
-  .range-slider-wrap input[type="range"] {
-    position: absolute;
-    width: 100%;
-    height: 36px;
-    -webkit-appearance: none;
-    appearance: none;
-    background: none;
-    pointer-events: none;
-    z-index: 2;
-    margin: 0;
-    padding: 0;
-    top: 0;
-  }
-  .range-slider-wrap input[type="range"]::-webkit-slider-runnable-track {
-    height: 4px;
-    background: transparent;
-  }
-  .range-slider-wrap input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: #DAFF00;
-    border: 2px solid #0a0a0a;
-    box-shadow: 0 0 0 3px rgba(218, 255, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.5);
-    cursor: pointer;
-    pointer-events: auto;
-    margin-top: -7px;
-    transition: box-shadow 0.2s ease, transform 0.15s ease;
-  }
-  .range-slider-wrap input[type="range"]::-webkit-slider-thumb:hover {
-    box-shadow: 0 0 0 5px rgba(218, 255, 0, 0.25), 0 2px 12px rgba(0, 0, 0, 0.6);
-    transform: scale(1.1);
-  }
-  .range-slider-wrap input[type="range"]::-webkit-slider-thumb:active {
-    box-shadow: 0 0 0 6px rgba(218, 255, 0, 0.3), 0 2px 16px rgba(0, 0, 0, 0.7);
-    transform: scale(1.15);
-  }
-  /* Firefox */
-  .range-slider-wrap input[type="range"]::-moz-range-track {
-    height: 4px;
-    background: transparent;
-    border: none;
-  }
-  .range-slider-wrap input[type="range"]::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    background: #DAFF00;
-    border: 2px solid #0a0a0a;
-    box-shadow: 0 0 0 3px rgba(218, 255, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.5);
-    cursor: pointer;
-    pointer-events: auto;
-  }
 
-  .slider-ticks {
-    display: flex;
-    justify-content: space-between;
-    padding: 4px 0 0 0;
-  }
-  .slider-tick {
-    font-size: 10px;
-    color: #404040;
-    font-variant-numeric: tabular-nums;
-    font-weight: 500;
-  }
-
-  /* Responsive */
-  @media (max-width: 640px) {
-    #panel { width: calc(100% - 32px); }
+  /* ==================== RESPONSIVE ==================== */
+  @media (max-width: 768px) {
+    #top-bar { padding: 10px 12px 20px 12px; gap: 8px; }
+    .brand-title { display: none; }
+    .brand-sep { display: none; }
+    #search-wrap { max-width: none; }
+    .share-btn { padding: 9px 10px; }
+    #panel { width: calc(100% - 32px); top: 56px; }
+    #city-card { width: calc(100% - 32px); top: 56px; }
+    #cta-banner { width: calc(100% - 32px); right: 16px; left: 16px; top: 56px; }
     #legend { right: 16px; }
-    #date-slider-container { padding: 12px 20px 16px 20px; }
+    #request-modal { padding: 24px; }
+  }
+  @media (max-width: 480px) {
+    #cta-banner { display: none; }
   }
 </style>
 </head>
@@ -468,9 +551,73 @@
 
 <div id="map"></div>
 
+<!-- ==================== TOP BAR ==================== -->
+<div id="top-bar">
+  <a href="https://cyvl.com" target="_blank" class="brand">
+    <span class="brand-logo">CYVL</span>
+    <span class="brand-sep"></span>
+    <span class="brand-title">Street View Freshness Map</span>
+  </a>
+  <div id="search-wrap">
+    <span class="search-icon">&#x1F50D;</span>
+    <input type="text" id="city-search" placeholder="Search your city..." autocomplete="off" spellcheck="false">
+    <div id="search-results"></div>
+  </div>
+  <button class="share-btn" id="share-btn">Share</button>
+</div>
+
+<!-- ==================== CITY REPORT CARD ==================== -->
+<div id="city-card">
+  <div class="card-header">
+    <div class="card-header-top">
+      <div>
+        <div class="card-city-name" id="card-city-name">--</div>
+        <div class="card-grade" id="card-grade">--</div>
+      </div>
+      <button class="card-close" id="card-close">&times;</button>
+    </div>
+  </div>
+  <div class="card-stats">
+    <div>
+      <div class="card-stat-value" id="card-points">--</div>
+      <div class="card-stat-label">Points sampled</div>
+    </div>
+    <div>
+      <div class="card-stat-value warning" id="card-avg-age">--</div>
+      <div class="card-stat-label">Avg imagery age</div>
+    </div>
+    <div>
+      <div class="card-stat-value danger" id="card-no-cov">--</div>
+      <div class="card-stat-label">No coverage</div>
+    </div>
+    <div>
+      <div class="card-stat-value" id="card-oldest">--</div>
+      <div class="card-stat-label">Oldest imagery</div>
+    </div>
+  </div>
+  <div class="card-breakdown">
+    <div class="card-breakdown-bar" id="card-bar"></div>
+    <div class="card-breakdown-labels">
+      <span>&lt;1yr</span><span>1-3yr</span><span>3-5yr</span><span>&gt;5yr</span><span>None</span>
+    </div>
+  </div>
+  <div class="card-cta">
+    <div class="card-cta-text">
+      Need current imagery here? <strong>CYVL delivers fresh captures within weeks.</strong>
+    </div>
+    <button class="cta-btn-primary" onclick="openRequestModal()">Get Fresh Imagery</button>
+    <div class="card-share-row">
+      <a class="card-share-btn" id="card-share-x" href="#" target="_blank" title="Share on X"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg></a>
+      <a class="card-share-btn" id="card-share-li" href="#" target="_blank" title="Share on LinkedIn"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg></a>
+      <a class="card-share-btn" id="card-share-email" href="#" title="Share via Email"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 4l-10 8L2 4"/></svg></a>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== DEFAULT PANEL ==================== -->
 <div id="panel">
-  <h1>Google Street View Freshness</h1>
-  <div class="subtitle">US Coverage Analysis</div>
+  <h1>How Fresh Is Your Street View?</h1>
+  <div class="subtitle">US Coverage Analysis &middot; <span id="stat-total-inline">--</span> roads sampled</div>
   <div class="filter-subtitle" id="filter-subtitle"></div>
 
   <div class="stats">
@@ -497,20 +644,7 @@
 
   <div class="controls">
     <div class="control-group">
-      <div class="control-label">Layer</div>
-      <div class="radio-group">
-        <input type="radio" name="layer" id="layer-hex" value="hex" checked>
-        <label for="layer-hex">Hex Grid</label>
-        <input type="radio" name="layer" id="layer-points" value="points">
-        <label for="layer-points">Points</label>
-        <input type="radio" name="layer" id="layer-heatmap" value="heatmap">
-        <label for="layer-heatmap">Staleness</label>
-        <input type="radio" name="layer" id="layer-gaps" value="gaps">
-        <label for="layer-gaps">Gaps</label>
-      </div>
-    </div>
-    <div class="control-group">
-      <div class="control-label">Tier Filter</div>
+      <div class="control-label">Filter</div>
       <div class="checkbox-group">
         <label><input type="checkbox" id="tier-1" checked> Cities 50K+</label>
         <label><input type="checkbox" id="tier-2" checked> Cities 10K-50K</label>
@@ -520,600 +654,513 @@
   </div>
 </div>
 
+<!-- ==================== CTA BANNER (right side) ==================== -->
+<div id="cta-banner">
+  <div class="cta-banner-title">Your imagery is outdated.</div>
+  <div class="cta-banner-sub">CYVL captures fresh, high-resolution street imagery on demand. Any road, any city, within weeks.</div>
+  <button class="cta-btn-primary" onclick="openRequestModal()">Get Fresh Imagery</button>
+  <a class="cta-btn-secondary" href="https://cyvl.com" target="_blank">Learn More</a>
+</div>
+
+<!-- ==================== LEGEND ==================== -->
 <div id="legend">
   <div class="legend-title">Imagery Age</div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#00ff87"></div><span class="legend-label">&lt;1 year</span><span class="legend-count" id="legend-count-0">--</span></div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#7dd3fc"></div><span class="legend-label">1-3 years</span><span class="legend-count" id="legend-count-1">--</span></div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#fbbf24"></div><span class="legend-label">3-5 years</span><span class="legend-count" id="legend-count-2">--</span></div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#f97316"></div><span class="legend-label">&gt;5 years</span><span class="legend-count" id="legend-count-3">--</span></div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#dc2626; opacity:0.6"></div><span class="legend-label">No coverage</span><span class="legend-count" id="legend-count-4">--</span></div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#2ECC71"></div><span class="legend-label">&lt;1 year</span><span class="legend-count" id="legend-count-0">--</span></div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#6CB4D9"></div><span class="legend-label">1-3 years</span><span class="legend-count" id="legend-count-1">--</span></div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#E8A849"></div><span class="legend-label">3-5 years</span><span class="legend-count" id="legend-count-2">--</span></div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#D4654A"></div><span class="legend-label">&gt;5 years</span><span class="legend-count" id="legend-count-3">--</span></div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#8B3A4A"></div><span class="legend-label">No coverage</span><span class="legend-count" id="legend-count-4">--</span></div>
   <div class="legend-item"><div class="legend-swatch" style="background:#6b7280"></div><span class="legend-label">Unknown date</span><span class="legend-count" id="legend-count-5">--</span></div>
 </div>
 
-<!-- Date Range Slider -->
-<div id="date-slider-container">
-  <div id="date-slider-inner">
-    <div class="slider-header">
-      <span class="slider-range-label" id="slider-range-label">Loading...</span>
-      <label class="slider-no-coverage-toggle">
-        <input type="checkbox" id="show-no-coverage" checked>
-        Show no-coverage points
-      </label>
+
+<!-- ==================== REQUEST MODAL ==================== -->
+<div id="request-modal-overlay">
+  <div id="request-modal">
+    <button class="modal-close" onclick="closeRequestModal()">&times;</button>
+    <div class="modal-title">Request Fresh Street Imagery</div>
+    <div class="modal-sub">Tell us what you need. We'll capture high-resolution, up-to-date street-level imagery and deliver it within weeks.</div>
+    <div class="modal-form">
+      <div class="modal-input-row">
+        <input class="modal-input" type="text" id="modal-name" placeholder="Your name">
+        <input class="modal-input" type="email" id="modal-email" placeholder="Email address">
+      </div>
+      <input class="modal-input" type="text" id="modal-org" placeholder="Company / Organization (optional)">
+      <select class="modal-select" id="modal-use-case">
+        <option value="" disabled selected>What's your use case?</option>
+        <option value="municipal">Municipal / City Government</option>
+        <option value="real-estate">Real Estate</option>
+        <option value="insurance">Insurance</option>
+        <option value="construction">Construction & Development</option>
+        <option value="logistics">Delivery & Logistics</option>
+        <option value="urban-planning">Urban Planning</option>
+        <option value="research">Research / Academic</option>
+        <option value="other">Other</option>
+      </select>
+      <input class="modal-input" type="text" id="modal-location" placeholder="Road or area (e.g. Main St, Austin TX)">
+      <hr class="modal-divider">
+      <a class="modal-stripe-btn" id="stripe-checkout-btn" href="https://buy.stripe.com/REPLACE_WITH_YOUR_STRIPE_LINK" target="_blank">
+        Pay $100 Deposit &amp; Get Started
+      </a>
+      <div class="modal-alt">
+        <a href="https://cyvl.com/contact" target="_blank">Or contact our team for bulk / enterprise pricing</a>
+      </div>
+      <div class="modal-trust">
+        $100 deposit is fully refundable if we can't deliver.<br>
+        Imagery delivered within 2-4 weeks. Secure payment via Stripe.
+      </div>
     </div>
-    <div class="range-slider-wrap">
-      <div class="range-track"></div>
-      <div class="range-track-fill" id="range-track-fill"></div>
-      <input type="range" id="range-min" min="0" max="100" value="0" step="0.1">
-      <input type="range" id="range-max" min="0" max="100" value="100" step="0.1">
-    </div>
-    <div class="slider-ticks" id="slider-ticks"></div>
   </div>
 </div>
 
 <script>
+// ==================== CONFIG ====================
 const MAPBOX_TOKEN = 'pk.eyJ1Ijoicm9hZGduYXIiLCJhIjoiY21seXAwOWxkMTBmazNlb2pua3RmZ2pkbSJ9.h8Udf10pTAeI4WQC1yzGgA';
+const STRIPE_LINK = 'https://buy.stripe.com/REPLACE_WITH_YOUR_STRIPE_LINK'; // TODO: Replace with real Stripe Payment Link
+const SITE_URL = 'https://streetview.cyvl.com';
 
-mapboxgl.accessToken = MAPBOX_TOKEN;
+// MapLibre uses free tile sources — no access token needed
 
-const BUCKET_COLORS = {
-  0: '#00ff87',
-  1: '#7dd3fc',
-  2: '#fbbf24',
-  3: '#f97316',
-  4: '#dc2626',
-  5: '#6b7280'
-};
-
-const BUCKET_LABELS = {
-  0: '<1 year',
-  1: '1-3 years',
-  2: '3-5 years',
-  3: '>5 years',
-  4: 'No coverage',
-  5: 'Unknown date'
-};
-
+const BUCKET_COLORS = { 0:'#2ECC71', 1:'#6CB4D9', 2:'#E8A849', 3:'#D4654A', 4:'#8B3A4A', 5:'#4A4A55' };
+const BUCKET_LABELS = { 0:'<1 year', 1:'1-3 years', 2:'3-5 years', 3:'>5 years', 4:'No coverage', 5:'Unknown date' };
 const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-let geojsonData = null;
-let hexGeojsonData = null;
+let cityStats = null;  // Pre-computed city/national stats from JSON
 let map = null;
 let currentPopup = null;
-let hexHoverPopup = null;
 let hoveredHexId = null;
 
-// Slider state
-let dataMinYear = 2005;
-let dataMaxYear = 2026;
-let sliderMinVal = 2005;
-let sliderMaxVal = 2026;
+// City index for search
+let cityIndex = [];
 
-// Current layer mode
-let currentLayer = 'hex';
+// ==================== PMTILES PROTOCOL ====================
+const pmtilesProtocol = new pmtiles.Protocol();
+maplibregl.addProtocol('pmtiles', pmtilesProtocol.tile);
 
-// Initialize map
-map = new mapboxgl.Map({
+// ==================== MAP INIT ====================
+// US bounding box: SW corner, NE corner (with padding)
+const US_BOUNDS = [[-130, 23], [-64, 50]];
+
+map = new maplibregl.Map({
   container: 'map',
-  style: 'mapbox://styles/mapbox/dark-v11',
+  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
   center: [-98.5, 39.8],
   zoom: 4,
+  minZoom: 3.5,
   attributionControl: true
 });
+// No zoom controls — scroll/pinch to zoom
 
-map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right');
+map.on('load', () => { loadData(); });
 
-map.on('load', () => {
-  loadData();
-});
+// ==================== URL PARAMS ====================
+function getUrlParams() {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    city: params.get('city'),
+    lat: parseFloat(params.get('lat')),
+    lng: parseFloat(params.get('lng')),
+  };
+}
 
+// ==================== DATA LOADING ====================
 async function loadData() {
   try {
-    const [pointsRes, hexRes] = await Promise.all([
-      fetch('../data/freshness.geojson'),
-      fetch('../data/freshness_hex.geojson')
-    ]);
-    if (!pointsRes.ok) throw new Error(`Points HTTP ${pointsRes.status}`);
-    if (!hexRes.ok) throw new Error(`Hex HTTP ${hexRes.status}`);
+    const res = await fetch('data/city_stats.json');
+    if (!res.ok) throw new Error(`Stats HTTP ${res.status}`);
+    cityStats = await res.json();
 
-    geojsonData = await pointsRes.json();
-    hexGeojsonData = await hexRes.json();
-
-    // Compute data year range from points
-    let minY = Infinity, maxY = -Infinity;
-    geojsonData.features.forEach(f => {
-      const y = f.properties.y;
-      if (y != null && y > 0) {
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
-    });
-    if (minY !== Infinity) {
-      dataMinYear = Math.floor(minY);
-      dataMaxYear = Math.ceil(maxY);
-    }
-    sliderMinVal = dataMinYear;
-    sliderMaxVal = dataMaxYear;
-
-    initSlider();
+    buildCityIndex();
     addLayers();
     computeAndDisplayStats();
-    updateLayerVisibility();
 
     document.getElementById('loading-overlay').classList.add('hidden');
+
+    // Check URL params for deep link
+    const params = getUrlParams();
+    if (params.city) {
+      const q = params.city.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const match = cityIndex.find(c =>
+        c.key.replace(/-/g, '') === q || c.key === params.city.toLowerCase()
+      );
+      if (match) showCityCard(match.city, match.state);
+    }
   } catch (err) {
     document.querySelector('.loading-text').textContent = 'Error loading data: ' + err.message;
     document.querySelector('.loading-spinner').style.display = 'none';
-    console.error('Failed to load GeoJSON:', err);
   }
 }
 
-// ==================== SLIDER ====================
-
-function initSlider() {
-  const rangeMin = document.getElementById('range-min');
-  const rangeMax = document.getElementById('range-max');
-
-  rangeMin.min = dataMinYear;
-  rangeMin.max = dataMaxYear;
-  rangeMin.value = dataMinYear;
-  rangeMin.step = 0.05;
-
-  rangeMax.min = dataMinYear;
-  rangeMax.max = dataMaxYear;
-  rangeMax.value = dataMaxYear;
-  rangeMax.step = 0.05;
-
-  sliderMinVal = dataMinYear;
-  sliderMaxVal = dataMaxYear;
-
-  updateSliderUI();
-  buildTicks();
-
-  rangeMin.addEventListener('input', onSliderInput);
-  rangeMax.addEventListener('input', onSliderInput);
-
-  document.getElementById('show-no-coverage').addEventListener('change', () => {
-    applyFilters();
-  });
+// ==================== CITY INDEX & SEARCH ====================
+// Strip Census suffixes for better search matching
+function cleanCityName(name) {
+  return name.replace(/\s+(city|town|village|CDP|borough|municipality|city \(balance\)|unified government|metro government|metropolitan government|city and borough|county|consolidated government)$/i, '');
 }
 
-function onSliderInput() {
-  const rangeMin = document.getElementById('range-min');
-  const rangeMax = document.getElementById('range-max');
+function buildCityIndex() {
+  if (!cityStats) return;
+  cityIndex = Object.entries(cityStats.cities).map(([key, c]) => {
+    const clean = cleanCityName(c.city);
+    return {
+      key,
+      city: c.city,
+      displayName: clean,
+      state: c.state,
+      // Search against both clean name and full name
+      searchName: (clean + ' ' + c.city + ' ' + c.state).toLowerCase(),
+      ...c
+    };
+  });
+  // Sort by total sample points (bigger cities first)
+  cityIndex.sort((a, b) => b.total - a.total);
+}
 
-  let minVal = parseFloat(rangeMin.value);
-  let maxVal = parseFloat(rangeMax.value);
+function searchCities(query) {
+  if (!query || query.length < 2) return [];
+  const q = query.toLowerCase().trim();
+  // Split on comma/space to handle "city, ST" format
+  const parts = q.split(/[,\s]+/).filter(Boolean);
 
-  // Prevent crossing
-  if (minVal > maxVal - 0.2) {
-    if (this.id === 'range-min') {
-      minVal = maxVal - 0.2;
-      rangeMin.value = minVal;
-    } else {
-      maxVal = minVal + 0.2;
-      rangeMax.value = maxVal;
+  const results = [];
+  for (const entry of cityIndex) {
+    // All query parts must match somewhere in the search name
+    if (parts.every(p => entry.searchName.includes(p))) {
+      results.push(entry);
+      if (results.length >= 8) break;
     }
   }
-
-  sliderMinVal = minVal;
-  sliderMaxVal = maxVal;
-
-  updateSliderUI();
-  applyFilters();
-  computeAndDisplayStats();
+  return results;
 }
 
-function updateSliderUI() {
-  const rangeMin = document.getElementById('range-min');
-  const rangeMax = document.getElementById('range-max');
-  const fill = document.getElementById('range-track-fill');
-  const label = document.getElementById('slider-range-label');
+function getCityStats(cityEntry) {
+  const total = cityEntry.total;
+  const buckets = {};
+  for (let i = 0; i <= 5; i++) buckets[i] = cityEntry.buckets[i] || 0;
 
-  const pctMin = ((sliderMinVal - dataMinYear) / (dataMaxYear - dataMinYear)) * 100;
-  const pctMax = ((sliderMaxVal - dataMinYear) / (dataMaxYear - dataMinYear)) * 100;
+  const avgAge = cityEntry.avgAge;
+  const noCov = buckets[4];
+  const over3 = buckets[2] + buckets[3];
+  const oldest = cityEntry.oldest || 0;
 
-  fill.style.left = pctMin + '%';
-  fill.style.width = (pctMax - pctMin) + '%';
+  // Grade
+  let grade, gradeClass;
+  const stalePct = total > 0 ? (over3 + noCov) / total : 0;
+  if (stalePct > 0.6) { grade = 'F — Critical'; gradeClass = 'grade-f'; }
+  else if (stalePct > 0.4) { grade = 'D — Poor'; gradeClass = 'grade-d'; }
+  else if (stalePct > 0.25) { grade = 'C — Needs Update'; gradeClass = 'grade-c'; }
+  else if (stalePct > 0.1) { grade = 'B — Fair'; gradeClass = 'grade-b'; }
+  else { grade = 'A — Fresh'; gradeClass = 'grade-a'; }
 
-  label.textContent = decimalYearToLabel(sliderMinVal) + '  \u2014  ' + decimalYearToLabel(sliderMaxVal);
+  return { total, buckets, avgAge, noCov, over3, oldest, grade, gradeClass, centerLat: cityEntry.lat, centerLng: cityEntry.lng };
 }
 
-function decimalYearToLabel(y) {
-  const year = Math.floor(y);
-  const monthFrac = (y - year) * 12;
-  const month = Math.min(11, Math.max(0, Math.round(monthFrac)));
-  return MONTH_NAMES[month] + ' ' + year;
+function getAgeBadge(avgAge) {
+  if (avgAge == null) return { text: 'No data', cls: 'age-terrible' };
+  if (avgAge > 5) return { text: avgAge.toFixed(1) + 'yr avg', cls: 'age-terrible' };
+  if (avgAge > 3) return { text: avgAge.toFixed(1) + 'yr avg', cls: 'age-bad' };
+  if (avgAge > 1) return { text: avgAge.toFixed(1) + 'yr avg', cls: 'age-ok' };
+  return { text: avgAge.toFixed(1) + 'yr avg', cls: 'age-good' };
 }
 
-function buildTicks() {
-  const container = document.getElementById('slider-ticks');
-  container.innerHTML = '';
-  const startYear = Math.ceil(dataMinYear);
-  const endYear = Math.floor(dataMaxYear);
-  // Show ticks every 2-3 years for cleanliness
-  const step = (endYear - startYear) > 15 ? 3 : 2;
-  for (let y = startYear; y <= endYear; y += step) {
-    const tick = document.createElement('span');
-    tick.className = 'slider-tick';
-    tick.textContent = y;
-    container.appendChild(tick);
+// Search input
+const searchInput = document.getElementById('city-search');
+const searchResults = document.getElementById('search-results');
+
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value;
+  if (!q || q.length < 2) {
+    searchResults.classList.remove('visible');
+    searchResults.innerHTML = '';
+    return;
   }
+
+  const results = searchCities(q);
+  if (results.length === 0) {
+    searchResults.innerHTML = '<div class="search-result-item" style="opacity:0.5;pointer-events:none"><span class="search-result-city">No cities found for "' + q.replace(/</g,'&lt;') + '"</span></div>';
+    searchResults.classList.add('visible');
+    return;
+  }
+
+  searchResults.innerHTML = results.map(entry => {
+    const stats = getCityStats(entry);
+    const badge = getAgeBadge(stats.avgAge);
+    return `<div class="search-result-item" data-city="${entry.city}" data-state="${entry.state}">
+      <span class="search-result-city">${entry.displayName}, ${entry.state}</span>
+      <span class="search-result-age ${badge.cls}">${badge.text}</span>
+    </div>`;
+  }).join('');
+  searchResults.classList.add('visible');
+
+  searchResults.querySelectorAll('.search-result-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const city = el.dataset.city;
+      const state = el.dataset.state;
+      searchResults.classList.remove('visible');
+      const entry = cityIndex.find(c => c.city === city && c.state === state);
+      searchInput.value = (entry ? entry.displayName : city) + ', ' + state;
+      showCityCard(city, state);
+    });
+  });
+});
+
+searchInput.addEventListener('focus', () => {
+  if (searchInput.value.length >= 2) {
+    const results = searchCities(searchInput.value);
+    if (results.length > 0) searchResults.classList.add('visible');
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#search-wrap')) {
+    searchResults.classList.remove('visible');
+  }
+});
+
+// ==================== CITY CARD ====================
+function showCityCard(city, state) {
+  const entry = cityIndex.find(c => c.city === city && c.state === state);
+  if (!entry) return;
+
+  const stats = getCityStats(entry);
+  const card = document.getElementById('city-card');
+  const panel = document.getElementById('panel');
+
+  document.getElementById('card-city-name').textContent = entry.displayName + ', ' + state;
+
+  const gradeEl = document.getElementById('card-grade');
+  gradeEl.textContent = stats.grade;
+  gradeEl.className = 'card-grade ' + stats.gradeClass;
+
+  document.getElementById('card-points').textContent = fmt(stats.total);
+  document.getElementById('card-avg-age').textContent = stats.avgAge != null ? stats.avgAge.toFixed(1) + ' yr' : 'N/A';
+  document.getElementById('card-no-cov').textContent = stats.total > 0 ? ((stats.noCov / stats.total * 100).toFixed(0) + '%') : '--';
+  document.getElementById('card-oldest').textContent = stats.oldest > 0 ? stats.oldest.toFixed(1) + ' yr' : 'N/A';
+
+  // Breakdown bar
+  const bar = document.getElementById('card-bar');
+  const colors = ['#2ECC71','#6CB4D9','#E8A849','#D4654A','#8B3A4A'];
+  const counts = [stats.buckets[0], stats.buckets[1], stats.buckets[2], stats.buckets[3], stats.buckets[4]];
+  const barTotal = counts.reduce((s,c) => s + c, 0) || 1;
+  bar.innerHTML = counts.map((c, i) =>
+    `<div style="width:${(c/barTotal*100).toFixed(1)}%;background:${colors[i]}"></div>`
+  ).join('');
+
+  // Share links
+  const shareText = `${city}, ${state} gets a "${stats.grade}" for Street View freshness. ${stats.avgAge ? stats.avgAge.toFixed(1) + ' year avg imagery age.' : ''} Check your city:`;
+  const shareUrl = SITE_URL + '?city=' + encodeURIComponent((city + state).replace(/[^a-zA-Z0-9]/g, ''));
+
+  document.getElementById('card-share-x').href =
+    'https://x.com/intent/tweet?text=' + encodeURIComponent(shareText) + '&url=' + encodeURIComponent(shareUrl);
+  document.getElementById('card-share-li').href =
+    'https://www.linkedin.com/sharing/share-offsite/?url=' + encodeURIComponent(shareUrl);
+  document.getElementById('card-share-email').href =
+    'mailto:?subject=' + encodeURIComponent(entry.displayName + ', ' + state + ' — Street View Freshness') + '&body=' + encodeURIComponent(shareText + '\n\n' + shareUrl);
+
+  // Update URL
+  history.replaceState(null, '', '?city=' + encodeURIComponent((city + state).replace(/[^a-zA-Z0-9]/g, '')));
+
+  panel.style.display = 'none';
+  card.classList.add('visible');
+
+  // Fly to city
+  map.flyTo({ center: [stats.centerLng, stats.centerLat], zoom: 11, duration: 1500 });
+
+  // Pre-fill modal location
+  document.getElementById('modal-location').value = city + ', ' + state;
 }
 
-function isSliderAtFullRange() {
-  return Math.abs(sliderMinVal - dataMinYear) < 0.1 && Math.abs(sliderMaxVal - dataMaxYear) < 0.1;
+document.getElementById('card-close').addEventListener('click', () => {
+  document.getElementById('city-card').classList.remove('visible');
+  document.getElementById('panel').style.display = '';
+  history.replaceState(null, '', window.location.pathname);
+});
+
+// ==================== SHARE BUTTON ====================
+document.getElementById('share-btn').addEventListener('click', () => {
+  const text = "Did you know most US street imagery is years out of date? Check your city's Street View freshness:";
+  const url = SITE_URL;
+  if (navigator.share) {
+    navigator.share({ title: 'Street View Freshness Map', text, url }).catch(() => {});
+  } else {
+    navigator.clipboard.writeText(url + '\n' + text);
+    const btn = document.getElementById('share-btn');
+    btn.textContent = 'Link Copied!';
+    setTimeout(() => { btn.textContent = 'Share'; }, 2000);
+  }
+});
+
+// ==================== REQUEST MODAL ====================
+function openRequestModal() {
+  document.getElementById('request-modal-overlay').classList.add('visible');
 }
+function closeRequestModal() {
+  document.getElementById('request-modal-overlay').classList.remove('visible');
+}
+document.getElementById('request-modal-overlay').addEventListener('click', (e) => {
+  if (e.target === document.getElementById('request-modal-overlay')) closeRequestModal();
+});
+
+// Stripe button: append form data as URL params for tracking
+document.getElementById('stripe-checkout-btn').addEventListener('click', (e) => {
+  const name = document.getElementById('modal-name').value.trim();
+  const email = document.getElementById('modal-email').value.trim();
+  const org = document.getElementById('modal-org').value.trim();
+  const useCase = document.getElementById('modal-use-case').value;
+  const location = document.getElementById('modal-location').value.trim();
+
+  if (!email) {
+    e.preventDefault();
+    document.getElementById('modal-email').style.borderColor = '#ef4444';
+    document.getElementById('modal-email').focus();
+    return;
+  }
+
+  // Build Stripe link with prefilled email and client_reference_id
+  const base = STRIPE_LINK;
+  const params = new URLSearchParams();
+  if (email) params.set('prefilled_email', email);
+  // Pack metadata into client_reference_id (Stripe limit: 200 chars)
+  const ref = [name, org, useCase, location].filter(Boolean).join('|').slice(0, 200);
+  if (ref) params.set('client_reference_id', ref);
+
+  const finalUrl = base + (base.includes('?') ? '&' : '?') + params.toString();
+  e.target.href = finalUrl;
+});
+
 
 // ==================== LAYERS ====================
-
 function addLayers() {
-  // Points source
-  map.addSource('freshness', {
-    type: 'geojson',
-    data: geojsonData,
-    generateId: true
-  });
-
-  // Hex source
   map.addSource('freshness-hex', {
-    type: 'geojson',
-    data: hexGeojsonData,
-    generateId: true
-  });
-
-  // --- Hex fill layer ---
-  map.addLayer({
-    id: 'hex-fill',
-    type: 'fill',
-    source: 'freshness-hex',
+    type: 'vector',
+    url: 'pmtiles://freshness.pmtiles',
     minzoom: 3,
-    paint: {
-      'fill-color': [
-        'match', ['get', 'b'],
-        0, '#00ff87',
-        1, '#7dd3fc',
-        2, '#fbbf24',
-        3, '#f97316',
-        4, '#dc2626',
-        5, '#6b7280',
-        '#6b7280'
-      ],
-      'fill-opacity': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 0.6,
-        7, 0.5,
-        10, 0.35,
-        14, 0.3
-      ]
-    }
+    maxzoom: 14
   });
 
-  // --- Hex border layer ---
-  map.addLayer({
-    id: 'hex-border',
-    type: 'line',
-    source: 'freshness-hex',
-    minzoom: 3,
-    paint: {
-      'line-color': 'rgba(255, 255, 255, 0.15)',
-      'line-width': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 0.5,
-        10, 0.3,
-        14, 0.2
-      ],
-      'line-opacity': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 0.5,
-        10, 0.2,
-        14, 0.15
-      ]
-    }
-  });
+  // Four resolution layers with crossfade transitions:
+  // res 3 (coarse): full z3.5-6, fades out z6-7
+  // res 5 (medium): fades in z6-7, full z7-9, fades out z9-10
+  // res 7 (fine):   fades in z9-10, full z10-12, fades out z11.5-12.5
+  // res 9 (block):  fades in z11.5-12.5, full z12.5+
+  const fillColor = ['match',['get','b'], 0,'#2ECC71', 1,'#6CB4D9', 2,'#E8A849', 3,'#D4654A', 4,'#8B3A4A', 5,'#4A4A55', '#4A4A55'];
 
-  // --- Hex hover highlight ---
-  map.addLayer({
-    id: 'hex-hover',
-    type: 'fill',
-    source: 'freshness-hex',
-    minzoom: 3,
-    paint: {
-      'fill-color': '#ffffff',
-      'fill-opacity': [
-        'case',
-        ['boolean', ['feature-state', 'hover'], false],
-        0.15,
-        0
-      ]
-    }
-  });
+  // Each resolution has hard minzoom/maxzoom bounds so they're completely
+  // removed outside their range (no ghost hover/click). Crossfade happens
+  // within bounds via opacity interpolation.
+  // Lower opacity for a premium glass-like feel; softest at country zoom
+  const resLayers = [
+    { res: 5, minz: 3.5, maxz: 10,   fadeIn: null,         fadeOut: [9, 10],      fullOpacity: 0.28 },
+    { res: 7, minz: 9,   maxz: 12.5, fadeIn: [9, 10],      fadeOut: [11.5, 12.5], fullOpacity: 0.32 },
+    { res: 9, minz: 11.5, maxz: 24,  fadeIn: [11.5, 12.5], fadeOut: null,         fullOpacity: 0.30 },
+  ];
 
-  // --- Staleness heatmap ---
-  map.addLayer({
-    id: 'freshness-heatmap',
-    type: 'heatmap',
-    source: 'freshness',
-    filter: ['!=', ['get', 'b'], 4],
-    layout: { visibility: 'none' },
-    paint: {
-      'heatmap-weight': [
-        'match', ['get', 'b'],
-        0, 0.05,
-        1, 0.25,
-        2, 0.6,
-        3, 1.0,
-        5, 0.3,
-        0.1
-      ],
-      'heatmap-intensity': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 0.8,
-        8, 1.2,
-        14, 1.5
-      ],
-      'heatmap-color': [
-        'interpolate', ['linear'], ['heatmap-density'],
-        0, 'rgba(0,0,0,0)',
-        0.15, 'rgba(0,200,130,0.4)',
-        0.3, 'rgba(100,220,200,0.5)',
-        0.5, 'rgba(255,200,50,0.65)',
-        0.7, 'rgba(255,120,20,0.8)',
-        0.9, 'rgba(240,50,30,0.9)',
-        1, 'rgba(200,0,0,1)'
-      ],
-      'heatmap-radius': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 12,
-        6, 20,
-        10, 35,
-        14, 50
-      ],
-      'heatmap-opacity': 0.85
+  resLayers.forEach(({ res, minz, maxz, fadeIn, fadeOut, fullOpacity }) => {
+    // Build opacity ramp with crossfade
+    let opacityStops = [];
+    if (fadeIn) {
+      opacityStops.push(fadeIn[0], 0, fadeIn[1], fullOpacity);
+    } else {
+      opacityStops.push(minz, fullOpacity);
     }
-  });
-
-  // --- Coverage gaps heatmap ---
-  map.addLayer({
-    id: 'freshness-gaps',
-    type: 'heatmap',
-    source: 'freshness',
-    filter: ['==', ['get', 'b'], 4],
-    layout: { visibility: 'none' },
-    paint: {
-      'heatmap-weight': 1,
-      'heatmap-intensity': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 0.8,
-        8, 1.2,
-        14, 1.5
-      ],
-      'heatmap-color': [
-        'interpolate', ['linear'], ['heatmap-density'],
-        0, 'rgba(0,0,0,0)',
-        0.15, 'rgba(80,20,120,0.3)',
-        0.3, 'rgba(130,40,180,0.5)',
-        0.5, 'rgba(180,50,200,0.65)',
-        0.7, 'rgba(220,60,180,0.8)',
-        0.9, 'rgba(255,80,160,0.9)',
-        1, 'rgba(255,120,200,1)'
-      ],
-      'heatmap-radius': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 12,
-        6, 20,
-        10, 35,
-        14, 50
-      ],
-      'heatmap-opacity': 0.85
+    if (fadeOut) {
+      if (!fadeIn || fadeOut[0] > fadeIn[1]) opacityStops.push(fadeOut[0], fullOpacity);
+      opacityStops.push(fadeOut[1], 0);
+    } else {
+      opacityStops.push(14, fullOpacity * 0.9);
     }
-  });
 
-  // --- Circle layer ---
-  map.addLayer({
-    id: 'freshness-circles',
-    type: 'circle',
-    source: 'freshness',
-    paint: {
-      'circle-radius': [
-        'interpolate', ['linear'], ['zoom'],
-        3, ['case', ['==', ['get', 'b'], 4], 0.6, 1],
-        6, ['case', ['==', ['get', 'b'], 4], 1.2, 2],
-        9, ['case', ['==', ['get', 'b'], 4], 2.4, 4],
-        12, ['case', ['==', ['get', 'b'], 4], 3.6, 6],
-        15, ['case', ['==', ['get', 'b'], 4], 6, 10]
-      ],
-      'circle-color': [
-        'match', ['get', 'b'],
-        0, '#00ff87',
-        1, '#7dd3fc',
-        2, '#fbbf24',
-        3, '#f97316',
-        4, '#dc2626',
-        5, '#6b7280',
-        '#6b7280'
-      ],
-      'circle-opacity': [
-        'interpolate', ['linear'], ['zoom'],
-        3, ['case', ['==', ['get', 'b'], 4], 0.5, 0.7],
-        10, ['case', ['==', ['get', 'b'], 4], 0.4, 0.6],
-        14, ['case', ['==', ['get', 'b'], 4], 0.35, 0.5]
-      ],
-      'circle-stroke-width': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 0,
-        8, 0,
-        9, 0.3,
-        14, 0.5
-      ],
-      'circle-stroke-color': 'rgba(255,255,255,0.2)',
-      'circle-stroke-opacity': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 0,
-        9, ['case', ['==', ['get', 'b'], 4], 0, 0.3],
-        14, ['case', ['==', ['get', 'b'], 4], 0, 0.3]
-      ]
-    }
-  });
+    const resFilter = ['==', ['get', 'r'], res];
 
-  // --- Circle hover highlight ---
-  map.addLayer({
-    id: 'freshness-highlight',
-    type: 'circle',
-    source: 'freshness',
-    paint: {
-      'circle-radius': [
-        'interpolate', ['linear'], ['zoom'],
-        3, 4,
-        9, 8,
-        15, 14
-      ],
-      'circle-color': [
-        'match', ['get', 'b'],
-        0, '#00ff87',
-        1, '#7dd3fc',
-        2, '#fbbf24',
-        3, '#f97316',
-        4, '#dc2626',
-        5, '#6b7280',
-        '#6b7280'
-      ],
-      'circle-opacity': 0.35,
-      'circle-stroke-width': 2,
-      'circle-stroke-color': '#ffffff',
-      'circle-stroke-opacity': 0.7
-    },
-    filter: ['==', ['id'], '']
+    map.addLayer({
+      id: `hex-fill-r${res}`, type: 'fill', source: 'freshness-hex', 'source-layer': 'hexgrid',
+      minzoom: minz, maxzoom: maxz,
+      filter: resFilter,
+      paint: {
+        'fill-color': fillColor,
+        'fill-opacity': ['interpolate', ['linear'], ['zoom'], ...opacityStops]
+      }
+    });
+
+    // Border uses the hex's own fill color at low opacity for a stained-glass look
+    map.addLayer({
+      id: `hex-border-r${res}`, type: 'line', source: 'freshness-hex', 'source-layer': 'hexgrid',
+      minzoom: minz, maxzoom: maxz,
+      filter: resFilter,
+      paint: {
+        'line-color': fillColor,
+        'line-width': ['interpolate',['linear'],['zoom'], 3,0.4, 8,0.6, 12,0.8, 14,0.5],
+        'line-opacity': ['interpolate', ['linear'], ['zoom'], ...opacityStops.map((v, i) => i % 2 === 1 ? v * 0.5 : v)]
+      }
+    });
+
+    // Hover: brighter version of the hex color instead of flat white
+    map.addLayer({
+      id: `hex-hover-r${res}`, type: 'fill', source: 'freshness-hex', 'source-layer': 'hexgrid',
+      minzoom: minz, maxzoom: maxz,
+      filter: resFilter,
+      paint: {
+        'fill-color': fillColor,
+        'fill-opacity': ['case',['boolean',['feature-state','hover'],false], 0.25, 0]
+      }
+    });
   });
 
   setupInteractions();
 }
 
 function setupInteractions() {
-  // Point hover
-  map.on('mousemove', 'freshness-circles', (e) => {
-    if (currentLayer !== 'points' && currentLayer !== 'hex') return;
-    map.getCanvas().style.cursor = 'pointer';
-    if (e.features.length > 0) {
-      map.setFilter('freshness-highlight', ['==', ['id'], e.features[0].id]);
-    }
+  const fillLayers = ['hex-fill-r5', 'hex-fill-r7', 'hex-fill-r9'];
+  const hoverLayers = ['hex-hover-r5', 'hex-hover-r7', 'hex-hover-r9'];
+
+  // Hex hover highlight
+  fillLayers.forEach(layer => {
+    map.on('mousemove', layer, (e) => {
+      map.getCanvas().style.cursor = 'pointer';
+      if (e.features.length > 0) {
+        if (hoveredHexId !== null) map.setFeatureState({ source:'freshness-hex', sourceLayer:'hexgrid', id:hoveredHexId }, { hover:false });
+        hoveredHexId = e.features[0].id;
+        map.setFeatureState({ source:'freshness-hex', sourceLayer:'hexgrid', id:hoveredHexId }, { hover:true });
+      }
+    });
+    map.on('mouseleave', layer, () => {
+      map.getCanvas().style.cursor = '';
+      if (hoveredHexId !== null) {
+        map.setFeatureState({ source:'freshness-hex', sourceLayer:'hexgrid', id:hoveredHexId }, { hover:false });
+        hoveredHexId = null;
+      }
+    });
   });
 
-  map.on('mouseleave', 'freshness-circles', () => {
-    map.getCanvas().style.cursor = '';
-    map.setFilter('freshness-highlight', ['==', ['id'], '']);
-  });
-
-  // Point click popup
-  map.on('click', 'freshness-circles', (e) => {
+  // Hex click popup (stays open, interactive)
+  fillLayers.forEach(layer => map.on('click', layer, (e) => {
     if (!e.features.length) return;
-    if (currentLayer !== 'points' && currentLayer !== 'hex') return;
-
-    const f = e.features[0];
-    const props = f.properties;
-    const coords = e.lngLat;
-
     if (currentPopup) currentPopup.remove();
 
-    const tier = props.t;
+    const props = e.features[0].properties;
+    const n = props.n || 0;
+    const avgAge = props.aa != null ? props.aa.toFixed(1) : 'N/A';
+    const ncPct = props.nc != null ? props.nc.toFixed(1) : 'N/A';
+    const okCount = props.ok || 0;
     const bucket = props.b;
-    const city = props.c || '';
-    const state = props.st || '';
-    const population = props.p;
-    const imageDate = props.d || null;
-    const ageYears = props.a;
 
-    let title;
-    if (tier === 3 || (!city && !state)) {
-      title = 'Rural sample point';
-    } else {
-      title = city + (state ? ', ' + state : '');
+    let html = '<div class="popup-title">Area Summary</div>';
+    html += '<div class="popup-row"><span class="popup-row-label">Points sampled</span><span class="popup-row-value">' + n + '</span></div>';
+    html += '<div class="popup-row"><span class="popup-row-label">With coverage</span><span class="popup-row-value">' + okCount + '</span></div>';
+    html += '<div class="popup-row"><span class="popup-row-label">Avg age</span><span class="popup-row-value">' + avgAge + ' yr</span></div>';
+    html += '<div class="popup-row"><span class="popup-row-label">No coverage</span><span class="popup-row-value' + (parseFloat(ncPct) > 30 ? ' no-coverage' : '') + '">' + ncPct + '%</span></div>';
+
+    if (bucket >= 2 || bucket === 4) {
+      html += '<div class="popup-cta">';
+      html += '<button class="popup-cta-btn" onclick="openRequestModal()">Get Fresh Imagery Here</button>';
+      html += '</div>';
     }
 
-    let dateDisplay;
-    let dateClass = '';
-    if (bucket === 4) {
-      dateDisplay = 'No coverage';
-      dateClass = ' no-coverage';
-    } else if (!imageDate || bucket === 5) {
-      dateDisplay = 'Unknown';
-    } else {
-      dateDisplay = imageDate;
-    }
-
-    let bucketColorClass = '';
-    if (bucket >= 0 && bucket <= 3) bucketColorClass = ' bucket-' + bucket;
-
-    let ageDisplay = '';
-    if (bucket === 4) {
-      ageDisplay = '<span class="popup-row-value no-coverage">N/A</span>';
-    } else if (ageYears != null && ageYears >= 0) {
-      ageDisplay = '<span class="popup-row-value">' + ageYears.toFixed(1) + ' yr</span>';
-    } else {
-      ageDisplay = '<span class="popup-row-value">Unknown</span>';
-    }
-
-    let popupHtml = '<div class="popup-title">' + title + '</div>';
-    if (population && tier !== 3) {
-      popupHtml += '<div class="popup-row"><span class="popup-row-label">Population</span><span class="popup-row-value">' + Number(population).toLocaleString() + '</span></div>';
-    }
-    popupHtml += '<div class="popup-row"><span class="popup-row-label">Imagery date</span><span class="popup-row-value' + dateClass + '">' + dateDisplay + '</span></div>';
-    popupHtml += '<div class="popup-row"><span class="popup-row-label">Age</span>' + ageDisplay + '</div>';
-    popupHtml += '<div class="popup-row"><span class="popup-row-label">Category</span><span class="popup-row-value' + bucketColorClass + '">' + (BUCKET_LABELS[bucket] || 'Unknown') + '</span></div>';
-
-    currentPopup = new mapboxgl.Popup({ closeButton: true, maxWidth: '260px' })
-      .setLngLat(coords)
-      .setHTML(popupHtml)
-      .addTo(map);
-  });
-
-  // Hex hover
-  map.on('mousemove', 'hex-fill', (e) => {
-    if (currentLayer !== 'hex') return;
-    map.getCanvas().style.cursor = 'pointer';
-
-    if (e.features.length > 0) {
-      // Clear previous hover state
-      if (hoveredHexId !== null) {
-        map.setFeatureState({ source: 'freshness-hex', id: hoveredHexId }, { hover: false });
-      }
-      hoveredHexId = e.features[0].id;
-      map.setFeatureState({ source: 'freshness-hex', id: hoveredHexId }, { hover: true });
-
-      const props = e.features[0].properties;
-      const n = props.n || 0;
-      const avgAge = props.aa != null ? props.aa.toFixed(1) : 'N/A';
-      const ncPct = props.nc != null ? props.nc.toFixed(1) : 'N/A';
-      const okCount = props.ok || 0;
-
-      let html = '<div class="popup-title">Hex Summary</div>';
-      html += '<div class="popup-row"><span class="popup-row-label">Total points</span><span class="popup-row-value">' + n + '</span></div>';
-      html += '<div class="popup-row"><span class="popup-row-label">With coverage</span><span class="popup-row-value">' + okCount + '</span></div>';
-      html += '<div class="popup-row"><span class="popup-row-label">Avg age</span><span class="popup-row-value">' + avgAge + ' yr</span></div>';
-      html += '<div class="popup-row"><span class="popup-row-label">No coverage</span><span class="popup-row-value' + (parseFloat(ncPct) > 30 ? ' no-coverage' : '') + '">' + ncPct + '%</span></div>';
-
-      if (hexHoverPopup) hexHoverPopup.remove();
-      hexHoverPopup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, maxWidth: '240px', offset: 12 })
-        .setLngLat(e.lngLat)
-        .setHTML(html)
-        .addTo(map);
-    }
-  });
-
-  map.on('mouseleave', 'hex-fill', () => {
-    map.getCanvas().style.cursor = '';
-    if (hoveredHexId !== null) {
-      map.setFeatureState({ source: 'freshness-hex', id: hoveredHexId }, { hover: false });
-      hoveredHexId = null;
-    }
-    if (hexHoverPopup) {
-      hexHoverPopup.remove();
-      hexHoverPopup = null;
-    }
-  });
+    currentPopup = new maplibregl.Popup({ closeButton:true, maxWidth:'260px' })
+      .setLngLat(e.lngLat).setHTML(html).addTo(map);
+  }));
 }
 
 // ==================== FILTERS ====================
-
 function getVisibleTiers() {
   const tiers = [];
   if (document.getElementById('tier-1').checked) tiers.push(1);
@@ -1122,186 +1169,50 @@ function getVisibleTiers() {
   return tiers;
 }
 
-function buildTierFilter(tiers) {
-  if (tiers.length === 0) return ['==', ['get', 't'], -1];
-  if (tiers.length === 3) return null;
-  return ['in', ['get', 't'], ['literal', tiers]];
-}
-
-function buildDateFilter() {
-  if (isSliderAtFullRange()) return null;
-  // Points with y: filter by range. Points without y (no coverage): controlled by toggle.
-  return null; // We handle this specially below
-}
-
 function applyFilters() {
-  const tiers = getVisibleTiers();
-  const tierFilter = buildTierFilter(tiers);
-  const showNoCoverage = document.getElementById('show-no-coverage').checked;
-  const atFullRange = isSliderAtFullRange();
-
-  // Build combined filter for point layers
-  // Date filter: features with y in range, OR features without y (if toggle on)
-  const conditions = [];
-
-  if (tierFilter) conditions.push(tierFilter);
-
-  if (!atFullRange) {
-    // Date filtering: include if (has y AND y in range) OR (no y AND showNoCoverage)
-    const dateCondition = [
-      'any',
-      [
-        'all',
-        ['has', 'y'],
-        ['>=', ['get', 'y'], sliderMinVal],
-        ['<=', ['get', 'y'], sliderMaxVal]
-      ],
-      showNoCoverage
-        ? ['!', ['has', 'y']]
-        : ['==', 1, 0] // false - exclude no-y features
-    ];
-    conditions.push(dateCondition);
-  } else if (!showNoCoverage) {
-    // Full range but hiding no-coverage
-    conditions.push(['has', 'y']);
-  }
-
-  const circleFilter = conditions.length === 0 ? null
-    : conditions.length === 1 ? conditions[0]
-    : ['all', ...conditions];
-
-  // Apply to circle layers
-  ['freshness-circles', 'freshness-highlight'].forEach(layerId => {
-    if (map.getLayer(layerId)) {
-      map.setFilter(layerId, circleFilter);
-    }
-  });
-
-  // Staleness heatmap: same as circle but also exclude bucket 4
-  if (map.getLayer('freshness-heatmap')) {
-    const heatConditions = [['!=', ['get', 'b'], 4]];
-    if (tierFilter) heatConditions.push(tierFilter);
-    if (!atFullRange) {
-      heatConditions.push([
-        'all',
-        ['has', 'y'],
-        ['>=', ['get', 'y'], sliderMinVal],
-        ['<=', ['get', 'y'], sliderMaxVal]
-      ]);
-    }
-    map.setFilter('freshness-heatmap', heatConditions.length === 1 ? heatConditions[0] : ['all', ...heatConditions]);
-  }
-
-  // Gaps heatmap: same tier filter + only bucket 4
-  if (map.getLayer('freshness-gaps')) {
-    const gapsConditions = [['==', ['get', 'b'], 4]];
-    if (tierFilter) gapsConditions.push(tierFilter);
-    map.setFilter('freshness-gaps', gapsConditions.length === 1 ? gapsConditions[0] : ['all', ...gapsConditions]);
-  }
-
-  // Hex layer is NOT filtered by date slider (always full picture)
-  // but we do NOT apply tier filter to hex either (hex is pre-aggregated)
-
-  // Update filter subtitle
-  updateFilterSubtitle();
-  computeAndDisplayStats();
-}
-
-function updateFilterSubtitle() {
   const el = document.getElementById('filter-subtitle');
-  if (!isSliderAtFullRange() && geojsonData) {
-    const tiers = getVisibleTiers();
-    const showNoCoverage = document.getElementById('show-no-coverage').checked;
-    const total = geojsonData.features.filter(f => tiers.includes(f.properties.t)).length;
-    const filtered = geojsonData.features.filter(f => {
-      if (!tiers.includes(f.properties.t)) return false;
-      const y = f.properties.y;
-      if (y != null) return y >= sliderMinVal && y <= sliderMaxVal;
-      return showNoCoverage;
-    }).length;
-    el.textContent = 'Filtered: ' + fmt(filtered) + ' of ' + fmt(total) + ' points';
+  const tiers = getVisibleTiers();
+  if (tiers.length < 3) {
+    el.textContent = 'Filtering by tier';
     el.classList.add('visible');
   } else {
     el.classList.remove('visible');
   }
-}
-
-// ==================== LAYER VISIBILITY ====================
-
-function updateLayerVisibility() {
-  const hexVisible = currentLayer === 'hex';
-  const pointsVisible = currentLayer === 'points';
-  const heatmapVisible = currentLayer === 'heatmap';
-  const gapsVisible = currentLayer === 'gaps';
-
-  map.setLayoutProperty('hex-fill', 'visibility', hexVisible ? 'visible' : 'none');
-  map.setLayoutProperty('hex-border', 'visibility', hexVisible ? 'visible' : 'none');
-  map.setLayoutProperty('hex-hover', 'visibility', hexVisible ? 'visible' : 'none');
-
-  map.setLayoutProperty('freshness-circles', 'visibility', pointsVisible ? 'visible' : 'none');
-  map.setLayoutProperty('freshness-highlight', 'visibility', pointsVisible ? 'visible' : 'none');
-
-  map.setLayoutProperty('freshness-heatmap', 'visibility', heatmapVisible ? 'visible' : 'none');
-  map.setLayoutProperty('freshness-gaps', 'visibility', gapsVisible ? 'visible' : 'none');
+  // Apply tier filter to all resolution layers
+  if (map) {
+    [5, 7, 9].forEach(res => {
+      const resFilter = ['==', ['get', 'r'], res];
+      const filter = tiers.length < 3
+        ? ['all', resFilter, ['in', ['get', 't'], ['literal', tiers]]]
+        : resFilter;
+      if (map.getLayer(`hex-fill-r${res}`)) map.setFilter(`hex-fill-r${res}`, filter);
+      if (map.getLayer(`hex-border-r${res}`)) map.setFilter(`hex-border-r${res}`, filter);
+    });
+  }
 }
 
 // ==================== STATS ====================
-
-function fmt(n) {
-  return n.toLocaleString();
-}
+function fmt(n) { return n.toLocaleString(); }
 
 function computeAndDisplayStats() {
-  if (!geojsonData) return;
-
-  const tiers = getVisibleTiers();
-  const atFullRange = isSliderAtFullRange();
-  const showNoCoverage = document.getElementById('show-no-coverage') ? document.getElementById('show-no-coverage').checked : true;
-
-  // Filter features by tier and optionally by date range
-  const features = geojsonData.features.filter(f => {
-    if (!tiers.includes(f.properties.t)) return false;
-    if (!atFullRange) {
-      const y = f.properties.y;
-      if (y != null) return y >= sliderMinVal && y <= sliderMaxVal;
-      return showNoCoverage;
-    }
-    return true;
-  });
-
-  const total = features.length;
-  const bucketCounts = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-  features.forEach(f => {
-    const b = f.properties.b;
-    if (b in bucketCounts) bucketCounts[b]++;
-  });
-
+  if (!cityStats) return;
+  const nat = cityStats.national;
+  const total = nat.total;
+  const bucketCounts = {};
+  for (let i = 0; i <= 5; i++) bucketCounts[i] = nat.buckets[i] || 0;
   const noCoverage = bucketCounts[4];
   const over3yr = bucketCounts[2] + bucketCounts[3];
-
-  // Compute median and average age
-  const ages = features
-    .map(f => f.properties.a)
-    .filter(a => a != null && a >= 0)
-    .sort((a, b) => a - b);
-
-  let medianAge = null;
-  let avgAge = null;
-  if (ages.length > 0) {
-    const mid = Math.floor(ages.length / 2);
-    medianAge = ages.length % 2 === 0 ? (ages[mid - 1] + ages[mid]) / 2 : ages[mid];
-    avgAge = ages.reduce((s, a) => s + a, 0) / ages.length;
-  }
+  const medianAge = nat.medianAge;
+  const avgAge = nat.avgAge;
 
   document.getElementById('stat-total').textContent = total > 0 ? fmt(total) : '--';
+  document.getElementById('stat-total-inline').textContent = total > 0 ? fmt(total) : '--';
   document.getElementById('stat-no-coverage').textContent = total > 0 ? fmt(noCoverage) : '--';
-  document.getElementById('stat-no-coverage-pct').textContent = total > 0 ? (noCoverage / total * 100).toFixed(1) + '% of total' : '';
+  document.getElementById('stat-no-coverage-pct').textContent = total > 0 ? (noCoverage/total*100).toFixed(1) + '% of total' : '';
   document.getElementById('stat-median-age').textContent = medianAge != null ? medianAge.toFixed(1) + ' yr' : '--';
   document.getElementById('stat-avg-age').textContent = avgAge != null ? 'avg ' + avgAge.toFixed(1) + ' yr' : '';
   document.getElementById('stat-over-3yr').textContent = total > 0 ? fmt(over3yr) : '--';
-  document.getElementById('stat-over-3yr-pct').textContent = total > 0 ? (over3yr / total * 100).toFixed(1) + '% of total' : '';
-
-  // Legend counts
+  document.getElementById('stat-over-3yr-pct').textContent = total > 0 ? (over3yr/total*100).toFixed(1) + '% of total' : '';
   for (let b = 0; b <= 5; b++) {
     const el = document.getElementById('legend-count-' + b);
     if (el) el.textContent = fmt(bucketCounts[b]);
@@ -1309,17 +1220,7 @@ function computeAndDisplayStats() {
 }
 
 // ==================== EVENT LISTENERS ====================
-
-// Layer toggle
-document.querySelectorAll('input[name="layer"]').forEach(radio => {
-  radio.addEventListener('change', (e) => {
-    currentLayer = e.target.value;
-    updateLayerVisibility();
-  });
-});
-
-// Tier filter
-['tier-1', 'tier-2', 'tier-3'].forEach(id => {
+['tier-1','tier-2','tier-3'].forEach(id => {
   document.getElementById(id).addEventListener('change', applyFilters);
 });
 </script>

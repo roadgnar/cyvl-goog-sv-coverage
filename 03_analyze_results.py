@@ -20,9 +20,9 @@ import pandas as pd
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(SCRIPT_DIR, "data")
-INPUT_CSV = os.path.join(DATA_DIR, "sv_results_v2.csv")
+INPUT_CSV = os.path.join(DATA_DIR, "sv_results_v4.csv")
 
-TODAY = date(2026, 3, 8)
+TODAY = date.today()
 
 NO_COVERAGE_STATUSES = {"ZERO_RESULTS", "NOT_FOUND"}
 
@@ -77,6 +77,12 @@ def freshness_stats(ages: pd.Series) -> dict:
 
 print(f"Reading {INPUT_CSV} ...")
 df = pd.read_csv(INPUT_CSV, dtype={"sv_date": str})
+
+# Filter out bad dates (e.g., year 2611 from garbage pano data)
+bad_date_mask = df["sv_date"].str.match(r"^2[6-9]\d{2}", na=False) | df["sv_date"].str.match(r"^[3-9]\d{3}", na=False)
+if bad_date_mask.any():
+    print(f"Filtering {bad_date_mask.sum()} rows with bad dates")
+    df.loc[bad_date_mask, "sv_date"] = ""
 
 # Derived columns
 df["is_ok"] = df["status"] == "OK"

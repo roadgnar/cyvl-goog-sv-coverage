@@ -29,21 +29,24 @@ from tqdm import tqdm
 # ---------------------------------------------------------------------------
 
 DATA_DIR = Path(__file__).parent / "data"
-SAMPLE_POINTS_PATH = DATA_DIR / "sample_points.csv"
-RESULTS_PATH = DATA_DIR / "sv_results_v2.csv"
+SAMPLE_POINTS_ORIGINAL = DATA_DIR / "sample_points.csv"
+SAMPLE_POINTS_SNAPPED = DATA_DIR / "sample_points_snapped.csv"
+# Use snapped points if available, otherwise fall back to original
+SAMPLE_POINTS_PATH = SAMPLE_POINTS_SNAPPED if SAMPLE_POINTS_SNAPPED.exists() else SAMPLE_POINTS_ORIGINAL
+RESULTS_PATH = DATA_DIR / "sv_results_v3.csv"
 ENV_PATH = Path(__file__).parent / ".env"
 
 API_BASE_URL = "https://maps.googleapis.com/maps/api/streetview/metadata"
 
 # Concurrency and rate limiting
-MAX_CONCURRENT = 50          # semaphore limit for parallel requests
-RATE_LIMIT_PER_MIN = 30_000  # Google's per-minute quota
+MAX_CONCURRENT = 5           # semaphore limit for parallel requests
+RATE_LIMIT_PER_MIN = 1_500   # conservative rate to avoid UNKNOWN_ERROR
 FLUSH_INTERVAL = 100         # flush CSV writer every N results
 LOG_INTERVAL = 1000          # print summary every N points
 
 # Retry configuration
-MAX_RETRIES = 3
-BACKOFF_BASE = 2             # exponential backoff base in seconds
+MAX_RETRIES = 5
+BACKOFF_BASE = 3             # exponential backoff base in seconds
 OVER_LIMIT_PAUSE = 60        # seconds to pause on OVER_QUERY_LIMIT
 
 # Output CSV columns
@@ -199,11 +202,11 @@ async def query_single_point(
         if status in ("OK", "ZERO_RESULTS", "NOT_FOUND"):
             return parse_response(data, point)
 
-        # Over quota — pause and retry
-        if status == "OVER_QUERY_LIMIT":
+        # Over quota or server-side throttle — pause and retry
+        if status in ("OVER_QUERY_LIMIT", "UNKNOWN_ERROR"):
             log.warning(
-                "OVER_QUERY_LIMIT for point %s. Pausing %ds before retry...",
-                point["point_id"], OVER_LIMIT_PAUSE,
+                "%s for point %s. Pausing %ds before retry...",
+                status, point["point_id"], OVER_LIMIT_PAUSE,
             )
             await asyncio.sleep(OVER_LIMIT_PAUSE)
             continue

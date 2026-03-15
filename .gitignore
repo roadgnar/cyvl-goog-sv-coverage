@@ -5,3 +5,7 @@ __pycache__/
 .venv/
 .DS_Store
 .claude/
+
+# Large generated files — deployed via wrangler/R2, not git
+viewer/freshness.pmtiles
+viewer/data/

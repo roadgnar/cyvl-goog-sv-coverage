@@ -1,10 +1,9 @@
-"""Convert Street View results CSV to GeoJSON files for the web viewer.
+"""Convert Street View results CSV to multi-resolution H3 hex GeoJSON files.
 
-Produces two files:
-  - data/freshness.geojson     — individual points with date filtering support
-  - data/freshness_hex.geojson — H3 hexagonal grid aggregated by freshness
-
-The hex file uses Uber's H3 spatial index at resolution 7 (~1.2km edge length).
+Produces three files at different H3 resolutions for tippecanoe/PMTiles:
+  - data/hex_r3.geojson — coarse (~12km edge), zoom 3-6
+  - data/hex_r5.geojson — medium (~3.5km edge), zoom 7-9
+  - data/hex_r7.geojson — fine (~1.2km edge), zoom 10+
 """
 
 import csv
@@ -17,12 +16,16 @@ from pathlib import Path
 
 import h3
 
-INPUT_PATH = Path("data/sv_results_v2.csv")
-POINTS_OUTPUT = Path("data/freshness.geojson")
-HEX_OUTPUT = Path("data/freshness_hex.geojson")
+INPUT_PATH = Path("data/sv_results_v4.csv")
 
-# H3 resolution: 7 = ~1.2km edge, good for city-level view
-H3_RESOLUTION = 7
+# Multi-resolution config: (h3_res, minzoom, maxzoom, output_path)
+# (h3_res, minzoom, maxzoom, output_path)
+RESOLUTIONS = [
+    (3, 3, 6, Path("data/hex_r3.geojson")),
+    (5, 7, 9, Path("data/hex_r5.geojson")),
+    (7, 10, 12, Path("data/hex_r7.geojson")),
+    (9, 12, 14, Path("data/hex_r9.geojson")),
+]
 
 STATUS_MAP = {"OK": 0, "ZERO_RESULTS": 1, "NOT_FOUND": 2}
 
@@ -37,25 +40,10 @@ def compute_age_years(sv_date: str) -> float | None:
         return None
     try:
         dt = datetime.strptime(sv_date.strip(), "%Y-%m")
-        delta = datetime.now() - dt
-        return round(delta.days / 365.25, 1)
-    except ValueError:
-        return None
-
-
-def date_to_decimal_year(sv_date: str) -> float | None:
-    """Convert YYYY-MM to a decimal year (e.g., 2024.25 for March 2024)."""
-    if not sv_date:
-        return None
-    try:
-        dt = datetime.strptime(sv_date.strip(), "%Y-%m")
-        # Sanity: reject dates before 2000 or after current year + 1
         if dt.year < 2000 or dt.year > datetime.now().year + 1:
             return None
-        year_start = datetime(dt.year, 1, 1)
-        year_end = datetime(dt.year + 1, 1, 1)
-        frac = (dt - year_start).days / (year_end - year_start).days
-        return round(dt.year + frac, 3)
+        delta = datetime.now() - dt
+        return round(delta.days / 365.25, 1)
     except ValueError:
         return None
 
@@ -74,12 +62,26 @@ def age_to_bucket(age: float | None, status_code: int) -> int:
     return 3
 
 
+def avg_age_to_bucket(avg_age: float | None, pct_no_cov: int) -> int:
+    """Derive color bucket from average age."""
+    if avg_age is not None:
+        if avg_age < 1:
+            return 0
+        if avg_age < 3:
+            return 1
+        if avg_age < 5:
+            return 2
+        return 3
+    if pct_no_cov > 80:
+        return 4
+    return 5
+
+
 def h3_cell_to_geojson_polygon(h3_index: str) -> list:
     """Convert H3 cell to GeoJSON polygon coordinates."""
     boundary = h3.cell_to_boundary(h3_index)
-    # h3 returns (lat, lng) tuples, GeoJSON needs [lng, lat]
-    coords = [[round(lng, 4), round(lat, 4)] for lat, lng in boundary]
-    coords.append(coords[0])  # close the ring
+    coords = [[round(lng, 6), round(lat, 6)] for lat, lng in boundary]
+    coords.append(coords[0])
     return [coords]
 
 
@@ -88,170 +90,129 @@ def main() -> None:
         print(f"Error: {INPUT_PATH} not found.")
         sys.exit(1)
 
-    # --- Pass 1: Build point features and collect hex cell data ---
-    features = []
-    bucket_counts: Counter = Counter()
-    hex_cells: dict[str, dict] = defaultdict(lambda: {
-        "ages": [], "buckets": [], "total": 0, "ok": 0, "no_cov": 0
-    })
-    skipped = 0
-    min_year = 9999.0
-    max_year = 0.0
+    # --- Pass 1: Read all points and aggregate into all resolutions ---
+    # hex_data[res][h3_index] = {ages, total, ok, no_cov, tiers}
+    hex_data: dict[int, dict] = {}
+    for res, _, _, _ in RESOLUTIONS:
+        hex_data[res] = defaultdict(lambda: {
+            "age_sum": 0.0, "age_count": 0, "total": 0, "ok": 0, "no_cov": 0,
+            "buckets": Counter(), "tiers": Counter(),
+        })
 
+    bucket_counts: Counter = Counter()
+    row_count = 0
+    skipped = 0
+
+    print(f"Reading {INPUT_PATH} ...")
     with open(INPUT_PATH, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             try:
-                lon = round(float(row["query_lng"]), 4)
-                lat = round(float(row["query_lat"]), 4)
+                lon = float(row["query_lng"])
+                lat = float(row["query_lat"])
             except (KeyError, ValueError, TypeError):
                 skipped += 1
                 continue
 
+            row_count += 1
             status_str = row.get("status", "NOT_FOUND")
             status_code = STATUS_MAP.get(status_str, 2)
             sv_date = row.get("sv_date", "").strip()
             age = compute_age_years(sv_date)
             bucket = age_to_bucket(age, status_code)
-            dec_year = date_to_decimal_year(sv_date)
             tier = int(row.get("tier", 3))
-            city = row.get("city_name", "") if tier != 3 else ""
-            state = row.get("state", "")
-            try:
-                population = int(row.get("population", 0))
-            except (ValueError, TypeError):
-                population = 0
-            if tier == 3:
-                population = 0
 
             bucket_counts[bucket] += 1
 
-            # Track date range
-            if dec_year is not None:
-                min_year = min(min_year, dec_year)
-                max_year = max(max_year, dec_year)
+            # Aggregate into each resolution
+            for res, _, _, _ in RESOLUTIONS:
+                try:
+                    h3_index = h3.latlng_to_cell(lat, lon, res)
+                except Exception:
+                    continue
 
-            # Build point feature with decimal year for slider filtering
-            props = {"b": bucket, "t": tier}
-            if status_code == 0:
-                if age is not None:
-                    props["a"] = age
-                if sv_date:
-                    props["d"] = sv_date
-                if dec_year is not None:
-                    props["y"] = dec_year
-            if city:
-                props["c"] = city
-            if state:
-                props["st"] = state
-            if population:
-                props["p"] = population
+                cell = hex_data[res][h3_index]
+                cell["total"] += 1
+                cell["buckets"][bucket] += 1
+                cell["tiers"][tier] += 1
+                if status_code == 0:
+                    cell["ok"] += 1
+                    if age is not None:
+                        cell["age_sum"] += age
+                        cell["age_count"] += 1
+                else:
+                    cell["no_cov"] += 1
 
-            features.append({
-                "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [lon, lat]},
-                "properties": props,
-            })
+    print(f"Read {row_count:,} points (skipped {skipped:,})")
 
-            # Aggregate into H3 hex cell
+    # --- Pass 2: Build GeoJSON for each resolution ---
+    for res, minzoom, maxzoom, output_path in RESOLUTIONS:
+        cells = hex_data[res]
+        features = []
+        dropped = 0
+
+        for h3_index, cell in cells.items():
+            total = cell["total"]
+            ok = cell["ok"]
+            no_cov = cell["no_cov"]
+
+            avg_age = round(cell["age_sum"] / cell["age_count"], 1) if cell["age_count"] > 0 else None
+            pct_no_cov = round(no_cov / total * 100) if total else 0
+            color_bucket = avg_age_to_bucket(avg_age, pct_no_cov)
+
+            dominant_tier = cell["tiers"].most_common(1)[0][0] if cell["tiers"] else 3
+
+            # Drop low-value cells at fine resolutions
+            if res == 7 and color_bucket == 4 and dominant_tier == 3:
+                # Res 7: drop rural no-coverage (coarser res covers them)
+                dropped += 1
+                continue
+            if res == 9 and color_bucket == 4 and dominant_tier == 3:
+                # Res 9: drop rural no-coverage (same as res 7)
+                dropped += 1
+                continue
+
             try:
-                h3_index = h3.latlng_to_cell(lat, lon, H3_RESOLUTION)
+                coords = h3_cell_to_geojson_polygon(h3_index)
             except Exception:
                 continue
 
-            cell = hex_cells[h3_index]
-            cell["total"] += 1
-            cell["buckets"].append(bucket)
-            if status_code == 0:
-                cell["ok"] += 1
-                if age is not None:
-                    cell["ages"].append(age)
-            else:
-                cell["no_cov"] += 1
-
-    # --- Write point GeoJSON ---
-    # Include date range metadata for the slider
-    points_geojson = {
-        "type": "FeatureCollection",
-        "metadata": {
-            "minYear": min_year if min_year < 9999 else None,
-            "maxYear": max_year if max_year > 0 else None,
-        },
-        "features": features,
-    }
-
-    POINTS_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    with open(POINTS_OUTPUT, "w", encoding="utf-8") as f:
-        json.dump(points_geojson, f, separators=(",", ":"))
-
-    pts_size = os.path.getsize(POINTS_OUTPUT) / (1024 * 1024)
-    print(f"Points: {len(features):,} features, {pts_size:.1f} MB")
-    print(f"Date range: {min_year:.1f} - {max_year:.1f}")
-
-    # --- Build H3 hex features ---
-    hex_features = []
-    for h3_index, cell in hex_cells.items():
-        total = cell["total"]
-        ok = cell["ok"]
-        no_cov = cell["no_cov"]
-        ages = cell["ages"]
-
-        avg_age = round(sum(ages) / len(ages), 1) if ages else None
-        pct_no_cov = round(no_cov / total * 100) if total else 0
-
-        # Dominant bucket (most common)
-        if cell["buckets"]:
-            bc = Counter(cell["buckets"])
-            dominant = bc.most_common(1)[0][0]
-        else:
-            dominant = 4
-
-        # Effective bucket based on average age (for coloring)
-        if avg_age is not None:
-            if avg_age < 1:
-                color_bucket = 0
-            elif avg_age < 3:
-                color_bucket = 1
-            elif avg_age < 5:
-                color_bucket = 2
-            else:
-                color_bucket = 3
-        elif pct_no_cov > 80:
-            color_bucket = 4
-        else:
-            color_bucket = 5
-
-        try:
-            coords = h3_cell_to_geojson_polygon(h3_index)
-        except Exception:
-            continue
-
-        hex_features.append({
-            "type": "Feature",
-            "geometry": {"type": "Polygon", "coordinates": coords},
-            "properties": {
+            props = {
                 "b": color_bucket,
                 "n": total,
                 "ok": ok,
                 "nc": pct_no_cov,
-                "aa": avg_age,
-            },
-        })
+                "t": dominant_tier,
+                "r": res,  # H3 resolution for runtime zoom filtering
+                "tippecanoe:minzoom": minzoom,
+                "tippecanoe:maxzoom": maxzoom,
+            }
+            if avg_age is not None:
+                props["aa"] = avg_age
 
-    hex_geojson = {"type": "FeatureCollection", "features": hex_features}
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": coords},
+                "properties": props,
+            })
 
-    with open(HEX_OUTPUT, "w", encoding="utf-8") as f:
-        json.dump(hex_geojson, f, separators=(",", ":"))
+        geojson = {"type": "FeatureCollection", "features": features}
 
-    hex_size = os.path.getsize(HEX_OUTPUT) / (1024 * 1024)
-    print(f"Hexes: {len(hex_features):,} cells, {hex_size:.1f} MB")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(geojson, f, separators=(",", ":"))
 
+        size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        drop_msg = f" (dropped {dropped:,} rural no-cov)" if dropped else ""
+        print(f"  res {res}: {len(features):,} cells, {size_mb:.1f} MB → {output_path}{drop_msg}")
+
+    # --- Summary ---
     print()
     print("Breakdown by age bucket (points):")
     for bid in sorted(AGE_BUCKET_LABELS.keys()):
         count = bucket_counts.get(bid, 0)
         label = AGE_BUCKET_LABELS[bid]
-        pct = (count / len(features) * 100) if features else 0
+        pct = (count / row_count * 100) if row_count else 0
         print(f"  {label:>15}: {count:>8,}  ({pct:5.1f}%)")
 
 

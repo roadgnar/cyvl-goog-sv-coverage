@@ -51,6 +51,10 @@ STATES_GEOJSON_URL = (
 PLACE_BOUNDARY_URL = (
     "https://www2.census.gov/geo/tiger/GENZ2023/shp/cb_2023_us_place_500k.zip"
 )
+# Census cartographic boundary county subdivision (MCD/township) shapefile
+COUSUB_BOUNDARY_URL = (
+    "https://www2.census.gov/geo/tiger/GENZ2023/shp/cb_2023_us_cousub_500k.zip"
+)
 
 GAZETTEER_ZIP = DATA_DIR / "2024_Gaz_place_national.zip"
 GAZETTEER_FILE = DATA_DIR / "2024_Gaz_place_national.txt"
@@ -58,6 +62,8 @@ POPULATION_FILE = DATA_DIR / "sub-est2023.csv"
 STATES_GEOJSON_FILE = DATA_DIR / "us-states.json"
 PLACE_BOUNDARY_ZIP = DATA_DIR / "cb_2023_us_place_500k.zip"
 PLACE_BOUNDARY_DIR = DATA_DIR / "place_boundaries"
+COUSUB_BOUNDARY_ZIP = DATA_DIR / "cb_2023_us_cousub_500k.zip"
+COUSUB_BOUNDARY_DIR = DATA_DIR / "cousub_boundaries"
 OUTPUT_FILE = DATA_DIR / "sample_points.csv"
 
 # Continental US bounding box
@@ -69,16 +75,18 @@ TIER1_MIN_POP = 50_000
 TIER2_MIN_POP = 10_000
 
 # Grid spacing within city polygons (km), by population
-# Denser for bigger cities so you can zoom in and see block-level coverage
+# Much denser now that we use streetlevel (no API cost/rate limits)
 CITY_GRID_SPACING = [
-    (500_000, 0.4),   # 500K+ -> 400m grid
-    (100_000, 0.6),   # 100K-500K -> 600m grid
-    (50_000, 0.8),    # 50K-100K -> 800m grid
-    (10_000, 1.0),    # 10K-50K -> 1km grid
+    (1_000_000, 0.15),  # 1M+   -> 150m grid (block-level in NYC, LA, Chicago etc)
+    (500_000,   0.2),   # 500K+ -> 200m grid
+    (250_000,   0.25),  # 250K+ -> 250m grid
+    (100_000,   0.3),   # 100K+ -> 300m grid
+    (50_000,    0.4),   # 50K+  -> 400m grid
+    (10_000,    0.5),   # 10K+  -> 500m grid
 ]
 
-# Rural hex grid spacing (km)
-HEX_SPACING_KM = 10.0
+# Rural hex grid spacing (km) — tighter for better national coverage
+HEX_SPACING_KM = 3.0
 
 # Approximate conversions
 KM_PER_DEG_LAT = 111.0
@@ -167,6 +175,16 @@ def download_all_data():
         with zipfile.ZipFile(PLACE_BOUNDARY_ZIP) as zf:
             zf.extractall(PLACE_BOUNDARY_DIR)
 
+    # County subdivision (MCD/township) boundary shapefile
+    if COUSUB_BOUNDARY_DIR.exists():
+        print(f"  [cached] cousub_boundaries/")
+    else:
+        download_file(COUSUB_BOUNDARY_URL, COUSUB_BOUNDARY_ZIP, "MCD/township boundaries (39MB)")
+        print("  Extracting MCD boundaries...")
+        COUSUB_BOUNDARY_DIR.mkdir(exist_ok=True)
+        with zipfile.ZipFile(COUSUB_BOUNDARY_ZIP) as zf:
+            zf.extractall(COUSUB_BOUNDARY_DIR)
+
 
 def load_us_land_polygon():
     """Load US states GeoJSON and return a prepared shapely geometry for land testing."""
@@ -230,18 +248,62 @@ def load_place_boundaries() -> dict:
     return boundaries
 
 
+def load_cousub_boundaries() -> dict:
+    """
+    Load Census county subdivision (MCD) boundary shapefile.
+    Returns dict of GEOID -> shapely polygon.
+    GEOID format is state_fips (2) + county_fips (3) + cousub_fips (5) = 10 chars.
+    """
+    print("  Loading MCD/township boundary polygons...")
+    shp_files = list(COUSUB_BOUNDARY_DIR.glob("*.shp"))
+    if not shp_files:
+        raise RuntimeError(f"No .shp file found in {COUSUB_BOUNDARY_DIR}")
+
+    sf = shapefile.Reader(str(shp_files[0]))
+    fields = [f[0] for f in sf.fields[1:]]
+
+    geoid_idx = fields.index("GEOID") if "GEOID" in fields else None
+    if geoid_idx is None:
+        statefp_idx = fields.index("STATEFP")
+        countyfp_idx = fields.index("COUNTYFP")
+        cousubfp_idx = fields.index("COUSUBFP")
+    else:
+        statefp_idx = countyfp_idx = cousubfp_idx = None
+
+    boundaries = {}
+    for sr in sf.iterShapeRecords():
+        rec = sr.record
+        if geoid_idx is not None:
+            geoid = str(rec[geoid_idx]).zfill(10)
+        else:
+            geoid = (str(rec[statefp_idx]).zfill(2)
+                     + str(rec[countyfp_idx]).zfill(3)
+                     + str(rec[cousubfp_idx]).zfill(5))
+        try:
+            geom = shape(sr.shape.__geo_interface__)
+            if geom.is_valid and not geom.is_empty:
+                boundaries[geoid] = geom
+        except Exception:
+            continue
+
+    print(f"  Loaded {len(boundaries):,} MCD/township boundary polygons")
+    return boundaries
+
+
 # ---------------------------------------------------------------------------
 # Step 2: Load and join data
 # ---------------------------------------------------------------------------
 
 
-def load_and_join() -> pd.DataFrame:
+def load_and_join(cousub_boundaries: dict) -> pd.DataFrame:
     """
     Load Gazetteer and population estimates, join on FIPS codes.
-    Returns DataFrame with city info for continental US places.
+    Includes both Census places (SUMLEV 162) and MCDs/townships (SUMLEV 061).
+    Returns DataFrame with city info for continental US.
     """
     print("\nStep 2: Loading and joining Census data")
 
+    # --- Load Gazetteer (for places) ---
     gaz = pd.read_csv(
         GAZETTEER_FILE,
         sep="\t",
@@ -254,10 +316,11 @@ def load_and_join() -> pd.DataFrame:
     gaz["STATE_FIPS"] = gaz["GEOID"].str[:2]
     gaz["PLACE_FIPS"] = gaz["GEOID"].str[2:]
 
+    # --- Load population estimates ---
     pop = pd.read_csv(
         POPULATION_FILE,
         encoding="latin-1",
-        dtype={"STATE": str, "PLACE": str},
+        dtype={"STATE": str, "PLACE": str, "COUNTY": str, "COUSUB": str},
     )
     print(f"  Population estimates: {len(pop)} rows loaded")
 
@@ -272,38 +335,97 @@ def load_and_join() -> pd.DataFrame:
             raise ValueError("No POPESTIMATE column found")
     print(f"  Using population column: {pop_col}")
 
-    if "SUMLEV" in pop.columns:
-        pop = pop[pop["SUMLEV"].astype(str) == "162"].copy()
+    # === Part A: Census Places (SUMLEV 162) — original approach ===
+    pop_places = pop[pop["SUMLEV"].astype(str) == "162"].copy()
 
-    merged = gaz.merge(
-        pop[["STATE", "PLACE", "NAME", pop_col]],
+    merged_places = gaz.merge(
+        pop_places[["STATE", "PLACE", "NAME", pop_col]],
         left_on=["STATE_FIPS", "PLACE_FIPS"],
         right_on=["STATE", "PLACE"],
         how="inner",
     )
-    merged = merged.rename(columns={pop_col: "population"})
-    print(f"  Joined: {len(merged)} places matched")
+    merged_places = merged_places.rename(columns={pop_col: "population"})
+    merged_places["lat"] = pd.to_numeric(merged_places["INTPTLAT"], errors="coerce")
+    merged_places["lng"] = pd.to_numeric(merged_places["INTPTLONG"], errors="coerce")
+    merged_places["city_name"] = merged_places["NAME_x"] if "NAME_x" in merged_places.columns else merged_places["NAME"]
+    merged_places["state"] = merged_places["USPS"]
+    merged_places["geoid"] = merged_places["STATE_FIPS"] + merged_places["PLACE_FIPS"].str.zfill(5)
+    merged_places["source"] = "place"
 
-    merged["lat"] = pd.to_numeric(merged["INTPTLAT"], errors="coerce")
-    merged["lng"] = pd.to_numeric(merged["INTPTLONG"], errors="coerce")
-    merged["city_name"] = merged["NAME_x"] if "NAME_x" in merged.columns else merged["NAME"]
-    merged["state"] = merged["USPS"]
-    # Build GEOID for boundary lookup (state_fips + place_fips, 7 chars)
-    merged["geoid"] = merged["STATE_FIPS"] + merged["PLACE_FIPS"].str.zfill(5)
+    places_df = merged_places[["city_name", "state", "population", "lat", "lng", "geoid", "source"]].copy()
+    print(f"  Census places: {len(places_df)} matched")
 
-    conus_mask = merged.apply(lambda r: in_conus(r["lat"], r["lng"]), axis=1)
-    merged = merged[conus_mask].copy()
-    print(f"  Continental US: {len(merged)} places")
+    # === Part B: MCDs/Townships (SUMLEV 061) ===
+    pop_mcds = pop[pop["SUMLEV"].astype(str) == "61"].copy()
+    pop_mcds["COUNTY"] = pop_mcds["COUNTY"].str.zfill(3)
+    pop_mcds["COUSUB"] = pop_mcds["COUSUB"].str.zfill(5)
+    pop_mcds["mcd_geoid"] = pop_mcds["STATE"] + pop_mcds["COUNTY"] + pop_mcds["COUSUB"]
+    pop_mcds = pop_mcds.rename(columns={pop_col: "population"})
 
-    merged["tier"] = 3
-    merged.loc[merged["population"] >= TIER2_MIN_POP, "tier"] = 2
-    merged.loc[merged["population"] >= TIER1_MIN_POP, "tier"] = 1
+    # Get lat/lng from MCD boundary shapefile centroids
+    mcd_rows = []
+    for _, row in pop_mcds.iterrows():
+        geoid = row["mcd_geoid"]
+        boundary = cousub_boundaries.get(geoid)
+        if boundary is None:
+            continue
+        centroid = boundary.centroid
+        mcd_rows.append({
+            "city_name": row["NAME"],
+            "state": row["STNAME"],
+            "population": row["population"],
+            "lat": round(centroid.y, 6),
+            "lng": round(centroid.x, 6),
+            "geoid": geoid,
+            "source": "mcd",
+        })
+    mcds_df = pd.DataFrame(mcd_rows)
 
-    tier_counts = merged["tier"].value_counts().sort_index()
+    # Build state name -> abbreviation from Gazetteer (which has USPS codes)
+    gaz_states = gaz[["STATE_FIPS", "USPS"]].drop_duplicates()
+    # Also build from pop data state FIPS
+    pop_state_names = pop[["STATE", "STNAME"]].drop_duplicates()
+    state_fips_to_abbrev = dict(zip(gaz_states["STATE_FIPS"], gaz_states["USPS"]))
+    state_name_to_fips = dict(zip(pop_state_names["STNAME"], pop_state_names["STATE"]))
+    state_name_to_abbrev = {
+        name: state_fips_to_abbrev.get(fips, "")
+        for name, fips in state_name_to_fips.items()
+    }
+    mcds_df["state"] = mcds_df["state"].map(state_name_to_abbrev)
+    mcds_df = mcds_df.dropna(subset=["state"])
+    mcds_df = mcds_df[mcds_df["state"] != ""]
+
+    print(f"  MCDs/townships: {len(mcds_df)} with boundaries")
+
+    # === Deduplicate: keep places, add MCDs not already covered ===
+    # Match on normalized name + state to find overlaps
+    def normalize(name):
+        import re
+        return re.sub(r"\s+(city|town|village|CDP|borough|township)$", "", name, flags=re.IGNORECASE).strip().lower()
+
+    place_keys = set(zip(places_df["city_name"].apply(normalize), places_df["state"]))
+    mask = mcds_df.apply(lambda r: (normalize(r["city_name"]), r["state"]) not in place_keys, axis=1)
+    new_mcds = mcds_df[mask].copy()
+    print(f"  MCDs not already in places: {len(new_mcds)}")
+
+    # === Combine ===
+    combined = pd.concat([places_df, new_mcds], ignore_index=True)
+
+    # Filter to continental US
+    conus_mask = combined.apply(lambda r: in_conus(r["lat"], r["lng"]), axis=1)
+    combined = combined[conus_mask].copy()
+    print(f"  Continental US total: {len(combined)} communities")
+
+    # Assign tiers
+    combined["tier"] = 3
+    combined.loc[combined["population"] >= TIER2_MIN_POP, "tier"] = 2
+    combined.loc[combined["population"] >= TIER1_MIN_POP, "tier"] = 1
+
+    tier_counts = combined["tier"].value_counts().sort_index()
     for t, c in tier_counts.items():
-        print(f"    Tier {t}: {c} cities")
+        print(f"    Tier {t}: {c} cities/towns")
 
-    return merged[["city_name", "state", "population", "lat", "lng", "tier", "geoid"]].reset_index(drop=True)
+    return combined[["city_name", "state", "population", "lat", "lng", "tier", "geoid", "source"]].reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -431,20 +553,23 @@ def generate_hex_grid(us_land) -> list[dict]:
     return points
 
 
-def generate_all_points(cities: pd.DataFrame, boundaries: dict, us_land) -> pd.DataFrame:
+def generate_all_points(cities: pd.DataFrame, place_boundaries: dict, cousub_boundaries: dict, us_land) -> pd.DataFrame:
     """Generate sample points for all tiers."""
     print("\nStep 3: Generating sample points")
+
+    # Merge both boundary dicts for lookup
+    all_boundaries = {**place_boundaries, **cousub_boundaries}
     all_points = []
 
     # Tier 1: dense grid within actual city boundaries
     print(f"  Tier 1: {len(cities[cities['tier'] == 1])} cities (grid within boundary polygons)")
-    tier1_points = generate_city_points(cities, boundaries, tier=1)
+    tier1_points = generate_city_points(cities, all_boundaries, tier=1)
     all_points.extend(tier1_points)
     print(f"  Tier 1: {len(tier1_points):,} points generated")
 
     # Tier 2: sparser grid within actual city boundaries
     print(f"  Tier 2: {len(cities[cities['tier'] == 2])} cities (grid within boundary polygons)")
-    tier2_points = generate_city_points(cities, boundaries, tier=2)
+    tier2_points = generate_city_points(cities, all_boundaries, tier=2)
     all_points.extend(tier2_points)
     print(f"  Tier 2: {len(tier2_points):,} points generated")
 
@@ -511,9 +636,10 @@ def save_and_report(df: pd.DataFrame) -> None:
 def main():
     download_all_data()
     us_land = load_us_land_polygon()
-    boundaries = load_place_boundaries()
-    cities = load_and_join()
-    points = generate_all_points(cities, boundaries, us_land)
+    place_boundaries = load_place_boundaries()
+    cousub_boundaries = load_cousub_boundaries()
+    cities = load_and_join(cousub_boundaries)
+    points = generate_all_points(cities, place_boundaries, cousub_boundaries, us_land)
     save_and_report(points)
 
 
